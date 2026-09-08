@@ -37,16 +37,6 @@ benchmark row are directly comparable.
 
 Each run also reports **dev** numbers — test is for the final table only.
 
-## Layout
-
-```
-experiments/
-  README.md          this file — the plan and the ablation table
-  <NN>_<slug>/       one directory per experiment
-    README.md        what changed, why, and the result
-    train.sh         the exact command (SLURM), so the run is repeatable
-```
-
 ## What differs, apart from the architecture
 
 Read off both codebases (`v2023 src/` and `main sign_language_segmentation/`).
@@ -114,11 +104,31 @@ The 2026 shipped checkpoint is the reference, not a row we produced.
 | **Run** | **Change** | **F1-ma** | **F1-mi** | **IoU** | **%** | **mF1S** | **F1-ma** | **F1-mi** | **IoU** | **%** | **mF1S** |
 | 2026 shipped | reference | 0.525 | 0.812 | 0.610 | 0.974 | 0.495 | 0.476 | 0.888 | 0.793 | 0.553 | 0.051 |
 | `00_2026_baseline` | all tricks on, batch 32, lr 1e-3 | 0.510 | 0.800 | 0.598 | 1.067 | 0.465 | 0.515 | 0.905 | 0.822 | 0.744 | 0.204 |
-| `01_basic_lr1e-3` | all tricks off, batch 64, lr 1e-3 | 0.519 | 0.813 | 0.587 | 1.121 | 0.464 | 0.544 | 0.911 | 0.831 | 1.080 | 0.286 |
+| `01_basic_lr1e-2` | all tricks off, batch 64 | 0.450 | 0.746 | 0.430 | 1.356 | 0.230 | 0.513 | 0.892 | 0.787 | 2.082 | 0.106 |
+| `01_basic_lr3e-3` | " | 0.476 | 0.768 | 0.485 | 1.100 | 0.335 | 0.526 | 0.904 | 0.821 | 0.878 | 0.176 |
+| `01_basic_lr1e-3` | " | 0.519 | 0.813 | 0.587 | 1.121 | 0.464 | 0.544 | 0.911 | 0.831 | 1.080 | 0.286 |
+| `01_basic_lr5e-4` | " | 0.515 | 0.805 | 0.566 | 1.035 | 0.430 | 0.545 | 0.905 | 0.823 | 1.280 | 0.333 |
+| `01_basic_lr3e-4` | " | 0.511 | 0.803 | 0.573 | 1.026 | 0.453 | 0.540 | 0.907 | 0.828 | 1.036 | 0.308 |
+| `01_basic_lr1e-4` | " | 0.502 | 0.796 | 0.538 | 1.022 | 0.416 | 0.542 | 0.904 | 0.812 | 1.108 | 0.310 |
+| `01_basic_lr3e-5` | " | 0.487 | 0.774 | 0.524 | 1.058 | 0.352 | 0.531 | 0.907 | 0.819 | 0.805 | 0.185 |
+| `01_basic_lr1e-5` | " | 0.464 | 0.748 | 0.471 | 1.264 | 0.234 | 0.525 | 0.902 | 0.812 | 0.981 | 0.148 |
+| `01_basic_lr3e-6` | " | 0.063 | 0.076 | 0.346 | 9.619 | 0.065 | 0.197 | 0.436 | 0.036 | 8.351 | 0.000 |
+| `01_basic_lr1e-6` | " | 0.038 | 0.047 | 0.351 | 3.000 | 0.053 | 0.199 | 0.436 | 0.043 | 10.217 | 0.000 |
 
-"All tricks" is dice loss, the three dropouts, and velocity; `fps_aug` is on in
-both. Both of ours train from scratch for 500 epochs, no hyperparameter search,
-selected on mean mF1S.
+"All tricks" is dice loss, the three dropouts, and velocity; `fps_aug` is on
+throughout. Every `01_basic` run is identical apart from the learning rate: from
+scratch, 500 epochs, patience 50, batch 64, `adamw-onecycle`, selected on
+`validation_mean_mf1s`. None hit the 5-hour cap; runtimes ran 21 min (lr 1e-2,
+best epoch 20) to 4h14m (lr 1e-5, best epoch 482).
 
+Ranked by the selection metric, mean of sign and phrase mF1S:
+
+| lr | mean mF1S | hm IoU | sign % | phrase % |
+|---|---|---|---|---|
+| 5e-4 | **0.382** | 0.671 | 1.035 | 1.280 |
+| 3e-4 | 0.381 | 0.677 | 1.026 | 1.036 |
+| 1e-3 | 0.375 | **0.688** | 1.121 | 1.080 |
+| 1e-4 | 0.363 | 0.648 | 1.022 | 1.108 |
+| 3e-5 | 0.268 | 0.639 | 1.058 | 0.805 |
 Predictions live in `experiments/predictions/` (dev), kept apart from
 `benchmark/predictions/` (test) so the two can never be scored together.
