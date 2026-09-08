@@ -13,7 +13,8 @@ later experiment turns exactly one trick back on:
     --batch_size 64          (upstream 8)      --dice_loss_weight 0   (1.5)
     --epochs 500             (200)             --frame_dropout 0      (0.15)
     --patience 10% of epochs (10)              --body_part_dropout 0  (0.1)
-    velocity off             (on, unswitchable) --attn_dropout 0      (0.1)
+    --learning_rate 1e-3     (1e-3, pinned)    --attn_dropout 0       (0.1)
+    velocity off             (on, unswitchable)
 
 `fps_aug` stays on: upstream calls it essential, and disabling it also switches
 label construction from `create_bio_from_times` to `create_bio`, which would
@@ -156,7 +157,11 @@ def main() -> None:
     # Batch 64: measured activations are 0.33 GiB per sample at 1024 frames, so
     # ~36 GiB peak. Fine on an 80GB A100, tight on a 40GB one. It also leaves
     # only ~9 steps/epoch over 586 clips, which is why epochs is 500.
-    basic = {"batch_size": 64, "epochs": 500,
+    # lr 1e-3 happens to be upstream's default too, but it is pinned here because
+    # the sweep chose it: 3e-4 / 5e-4 / 1e-3 sit within 0.007 mean mF1S of each
+    # other, and 1e-3 leads on IoU. Pinning keeps an upstream change from moving
+    # it silently. See README.md.
+    basic = {"batch_size": 64, "epochs": 500, "learning_rate": 1e-3,
              "dice_loss_weight": 0.0, "frame_dropout": 0.0,
              "body_part_dropout": 0.0, "attn_dropout": 0.0}
     for key, value in basic.items():
