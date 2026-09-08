@@ -58,7 +58,7 @@ This is the candidate list to ablate.
 | | 2023 | 2026 |
 |---|---|---|
 | BIO ids | `O=0, B=1, I=2` | `UNK=0, O=1, B=2, I=3` |
-| span → frames | `build_bio` walk for training/frame metrics; `floor`/`floor` inclusive for segment metrics | `create_bio` (floor/ceil), or `create_bio_from_times` (searchsorted on timestamps) when `fps_aug` |
+| span → frames | `build_bio`: B on the first frame at or after the span start, then I **stopping one frame short** of the end. Compares in seconds | `create_bio_from_times` (what `fps_aug` selects): same start rule, but I **includes** the last frame at or before the end. Compares in milliseconds. Without `fps_aug` it is `create_bio`, which floors the start instead |
 | phrase = | first gloss → last gloss | the `Deutsche_Übersetzung` tier's own bounds |
 | clip set | keeps signer-videos with no glosses | drops them |
 | split | TFDS split config | `splits.json`, extending `split.3.0.0-uzh-document` |

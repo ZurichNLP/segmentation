@@ -69,7 +69,27 @@ def _empty() -> dict:
 
 
 class ValidationMetricsModel(PoseTaggingModel):
-    """PoseTaggingModel reporting the benchmark's metrics on train and validation."""
+    """PoseTaggingModel reporting the benchmark's metrics on train and validation.
+
+    Also restores 2023's **inverse class-frequency weighting** when it is set.
+    Upstream replaced that weighting with a Dice term on the sign head, so
+    switching Dice off leaves a plain unweighted NLL that is neither model's
+    loss. `class_weights` is set by `train.py` before training starts.
+    """
+
+    #: {"sign": [...], "sentence": [...]}, one weight per BIO class, or None for
+    #: upstream's unweighted NLL. Set before the model is constructed.
+    class_weights = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.class_weights:
+            import torch.nn as nn
+            for level, attr in (("sign", "sign_loss_fn"),
+                                ("sentence", "phrase_loss_fn")):
+                weight = torch.tensor(self.class_weights[level], dtype=torch.float)
+                # NLLLoss is a Module, so Lightning moves the weight with the model
+                setattr(self, attr, nn.NLLLoss(reduction="none", weight=weight))
 
     #: compute train metrics every N steps. 9 ~= once per epoch at batch 64 over
     #: 586 clips; 1 would roughly double training cost.

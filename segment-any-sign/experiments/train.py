@@ -100,6 +100,12 @@ def main() -> None:
                       help="append fps-normalised velocity features (3->6 dims). "
                            "Upstream declares --velocity as store_true with "
                            "default True, so it cannot be disabled there at all")
+    ours.add_argument("--class-weights", default="auto",
+                      choices=["auto", "inverse", "none"],
+                      help="loss class weighting. auto (default) = 2023's inverse "
+                           "class frequency when dice is off, unweighted when it "
+                           "is on, so the loss is always one model's or the "
+                           "other's and never a hybrid")
     ours.add_argument("--select-on", default="mean_mf1s",
                       choices=["mean_mf1s", "hm_iou"],
                       help="checkpoint selection metric (default mean_mf1s: the "
@@ -174,6 +180,16 @@ def main() -> None:
 
     args.velocity = mine.velocity == "on"
 
+    # 2026 dropped 2023's class weighting when it added the Dice term, so with
+    # Dice off the loss would otherwise be a plain unweighted NLL — neither
+    # model's. Restore the weighting in that case.
+    weighting = mine.class_weights
+    if weighting == "auto":
+        weighting = "inverse" if args.dice_loss_weight == 0 else "none"
+    if weighting == "inverse":
+        ValidationMetricsModel.class_weights = inverse_class_weights(args)
+    args.class_weighting = weighting
+
     report_effective_config(args, mine, _dated_run_name(args.run_name))
 
     run_dir = Path("dist") / _dated_run_name(args.run_name)
@@ -220,6 +236,43 @@ def main() -> None:
         evaluate_best_checkpoint(run_dir, phrase=mine.phrase, split=mine.eval_split)
 
 
+def inverse_class_weights(args, samples: int = 50, seed: int = 0) -> dict:
+    """2023's per-level inverse class frequency, measured on training windows.
+
+    v2023 counted classes over the whole training set and used `total / count[i]`
+    as each class's weight. We sample windows instead — the balance depends on
+    windowing and augmentation, so it has to be measured as the model sees it,
+    and a full pass would decode every clip at every startup.
+
+    Returns one weight per BIO class in upstream's order (UNK, O, B, I). UNK gets
+    0: it marks padding, which the loss masks out anyway.
+    """
+    from collections import Counter
+
+    import numpy as np
+
+    from sign_language_segmentation.datasets.common import Split
+
+    from experiments.dgs_dataset import SharedDGSDataset
+    from sign_language_segmentation.utils.bio import BIO
+
+    dataset = SharedDGSDataset(split=Split.TRAIN, num_frames=args.num_frames,
+                               velocity=args.velocity, phrase=args.phrase)
+    picks = np.random.default_rng(seed).choice(
+        len(dataset), min(samples, len(dataset)), replace=False)
+
+    weights = {}
+    for level in ("sign", "sentence"):
+        counts: Counter = Counter()
+        for i in picks:
+            counts.update(dataset[int(i)]["bio"][level].numpy().tolist())
+        total = sum(counts.values())
+        weights[level] = [0.0 if name == "UNK" or not counts.get(index)
+                          else total / counts[index]
+                          for name, index in BIO.items()]
+    return weights
+
+
 def report_effective_config(args, mine, run_name: str) -> None:
     """Print what this run will actually use, after every override is applied.
 
@@ -243,6 +296,8 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"body_part_dropout {args.body_part_dropout:g}  "
           f"attn_dropout {args.attn_dropout:g}  velocity {args.velocity}"
           f"\n  tricks ON   fps_aug {args.fps_aug}  num_frames {args.num_frames}"
+          f"\n  loss        {'NLL' if args.class_weighting == 'none' else 'NLL + inverse class weights (2023)'}"
+          f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
           + (f"\n  LIMIT       {args.limit} clips per split — NOT a reportable run"
              if args.limit else ""))
 
