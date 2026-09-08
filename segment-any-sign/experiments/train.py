@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import sys
 from datetime import datetime
@@ -100,6 +101,11 @@ def main() -> None:
                       help="append fps-normalised velocity features (3->6 dims). "
                            "Upstream declares --velocity as store_true with "
                            "default True, so it cannot be disabled there at all")
+    ours.add_argument("--max-steps", type=int, default=5000,
+                      help="total optimiser steps, the unit that compares across "
+                           "datasets — DGS gives 10 steps/epoch, YouTube ~600, so "
+                           "'epochs' means nothing between them. --epochs is "
+                           "derived from this so OneCycle spans exactly the run")
     ours.add_argument("--early-stop", choices=["on", "off"], default="off",
                       help="stop when the selection metric plateaus. Off by "
                            "default: OneCycle anneals over --epochs, so stopping "
@@ -180,6 +186,17 @@ def main() -> None:
     for key, value in basic.items():
         if f"--{key}" not in rest:
             setattr(args, key, value)
+
+    # Budget in steps, not epochs. OneCycle is sized by epochs x steps_per_epoch,
+    # so epochs is derived to make the schedule span exactly the requested steps —
+    # otherwise a run stops mid-anneal, which is what early stopping used to do.
+    if "--epochs" not in rest and mine.max_steps:
+        clips = dataset_size(args)
+        steps_per_epoch = math.ceil(clips / args.batch_size)
+        args.epochs = max(1, math.ceil(mine.max_steps / steps_per_epoch))
+        print(f"\n{clips:,} training clips / batch {args.batch_size} = "
+              f"{steps_per_epoch:,} steps per epoch"
+              f"  ->  {args.epochs} epochs for ~{mine.max_steps:,} steps")
 
     # patience tracks the budget rather than being a fixed number of epochs
     if "--patience" not in rest:
@@ -266,6 +283,16 @@ def main() -> None:
         evaluate_best_checkpoint(run_dir, phrase=mine.phrase, split=mine.eval_split)
 
 
+def dataset_size(args) -> int:
+    """Number of training clips, for turning a step budget into epochs."""
+    from sign_language_segmentation.datasets.common import Split, build_datasets
+
+    return len(build_datasets(names=args.datasets, split=Split.TRAIN, args=args,
+                              num_frames=args.num_frames, velocity=args.velocity,
+                              fps_aug=args.fps_aug, frame_dropout=0.0,
+                              body_part_dropout=0.0))
+
+
 def inverse_class_weights(args, samples: int = 50, seed: int = 0) -> dict:
     """2023's per-level inverse class frequency, measured on training windows.
 
@@ -326,7 +353,7 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"body_part_dropout {args.body_part_dropout:g}  "
           f"attn_dropout {args.attn_dropout:g}  velocity {args.velocity}"
           f"\n  tricks ON   fps_aug {args.fps_aug}  num_frames {args.num_frames}"
-          f"\n  schedule    {args.epochs} epochs, early stop "
+          f"\n  schedule    ~{mine.max_steps:,} steps = {args.epochs} epochs, early stop "
           f"{'off (OneCycle runs to completion)' if mine.early_stop == 'off' else f'patience {args.patience}'}"
           f"\n  loss        {'NLL' if args.class_weighting == 'none' else 'NLL + inverse class weights (2023)'}"
           f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"

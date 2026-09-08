@@ -81,6 +81,11 @@ class ValidationMetricsModel(PoseTaggingModel):
     #: upstream's unweighted NLL. Set before the model is constructed.
     class_weights = None
 
+    #: which heads carry supervision. Subtitle pretraining sets ("sentence",):
+    #: masking the sign loss would still compute it, and scoring a head with no
+    #: gold wastes a decode per clip.
+    levels = ("sign", "sentence")
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.class_weights:
@@ -112,6 +117,8 @@ class ValidationMetricsModel(PoseTaggingModel):
                                          timestamps=batch.get("timestamps"))
 
             for upstream_name, our in LEVELS.items():
+                if upstream_name not in self.levels:
+                    continue
                 gold_all = batch["bio"][upstream_name]
                 for i in range(len(batch["pose"])):
                     gold = gold_all[i]
@@ -144,6 +151,40 @@ class ValidationMetricsModel(PoseTaggingModel):
                     counts = segment_counts(pred_segments, gold_segments)
                     bucket["counts"] = counts if bucket["counts"] is None \
                         else bucket["counts"] + counts
+
+    def step(self, batch, name: str):
+        """Upstream's step, restricted to the heads that carry supervision.
+
+        Upstream iterates both heads unconditionally, so an unsupervised one
+        cannot be skipped by hiding its labels — this mirrors its loss instead.
+        Kept deliberately close to the original; the only change is the `levels`
+        filter and the matching guard on the sign-head Dice term.
+        """
+        if set(self.levels) == set(LEVELS):
+            return super().step(batch, name)
+
+        pose_data = batch["pose"]
+        batch_size = len(pose_data)
+        log_probs = self.forward(pose_data, timestamps=batch.get("timestamps"))
+
+        total_loss = torch.zeros(1, device=self.device).squeeze()
+        for pred_type, loss_fn in (("sign", self.sign_loss_fn),
+                                   ("sentence", self.phrase_loss_fn)):
+            if pred_type not in self.levels:
+                continue
+            gold = batch["bio"][pred_type]
+            loss = loss_fn(log_probs[pred_type].transpose(1, 2), gold)
+            mask = (gold != BIO["UNK"]).float()
+            masked_loss = (loss * mask).sum() / mask.sum().clamp(min=1)
+            total_loss = total_loss + masked_loss
+            self.log(f"{name}_{pred_type}_loss", masked_loss,
+                     batch_size=batch_size, prog_bar=True)
+
+        self.log(f"{name}_loss", total_loss, batch_size=batch_size)
+        # the Dice term is defined on the sign head only, so it goes with it
+        if self.hparams.dice_loss_weight > 0.0 and "sign" in self.levels:
+            return super().step(batch, name)
+        return total_loss
 
     def _log_collected(self, collected: dict, prefix: str) -> None:
         """Log means, the two IoUs' harmonic mean, and the mF1S selection metric."""

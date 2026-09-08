@@ -133,13 +133,6 @@ Stage one of the staged design borrowed from [Segment Any Text](../literature/se
 
 For scale: DGS train is 91 hours and 61k phrases, so this is **~40x the hours** and **~40x the phrase-level units**.
 
-### Four things that differ from DGS, and need handling
-
-- **Variable frame rate.** DGS is uniformly 50 fps; here the sample shows 14.6, 19.9, 24.0, 25.0, 29.9 and more. RoPE takes timestamps in seconds so the model itself is fine, but every per-clip `fps` must come from the file rather than a constant, and `fps_aug` is arguably redundant when the corpus already varies.
-- **A different MediaPipe version.** `FACE_LANDMARKS` has **478** points, not DGS's 468, and there is an extra `POSE_WORLD_LANDMARKS` component. `preprocess_pose` keeps only body and hands, so both are dropped — but that is luck rather than design, and worth asserting on.
-- **The language code names the subtitle, not the signing.** `--6bmFM9wT4.ase.vtt` is labelled ASL, but 16,110 files are `en` — English text over signed video. The metadata CSV is 39,197 rows of `???`, so it carries no language label.
-- **Pose quality is unknown.** DGS is studio footage; this is the open web. The missing-keypoint rate will be higher than DGS's 2.2%, which is where "a zeroed keypoint reads as the mean pose" starts to matter.
-
 ### Runs
 
 | # | run | change | phrase IoU | phrase % | phrase mF1S |
