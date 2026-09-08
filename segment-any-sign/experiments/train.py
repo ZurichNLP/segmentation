@@ -101,6 +101,10 @@ def main() -> None:
                       help="append fps-normalised velocity features (3->6 dims). "
                            "Upstream declares --velocity as store_true with "
                            "default True, so it cannot be disabled there at all")
+    ours.add_argument("--val-datasets", default=None,
+                      help="comma-separated datasets to validate on. The FIRST is "
+                           "in-domain and supplies the selection metric; the rest "
+                           "are logged for information. Defaults to --datasets")
     ours.add_argument("--max-steps", type=int, default=5000,
                       help="total optimiser steps, the unit that compares across "
                            "datasets — DGS gives 10 steps/epoch, YouTube ~600, so "
@@ -168,6 +172,26 @@ def main() -> None:
     # metrics without touching upstream code or copying its training loop.
     from experiments.validation_metrics import ValidationMetricsModel
     upstream_train.PoseTaggingModel = ValidationMetricsModel
+
+    # Validate on a list of datasets, not one. Upstream builds a single DEV
+    # loader; wrapping `get_dataloader` turns that call into one loader per named
+    # dataset, which Lightning accepts as a list and reports with a
+    # `dataloader_idx` the model maps back to a name.
+    val_names = tuple((mine.val_datasets or args.datasets).split(","))
+    ValidationMetricsModel.val_dataset_names = val_names
+    args.val_datasets = ",".join(val_names)
+    _get_dataloader = upstream_train.get_dataloader
+
+    def get_dataloader_multi(split, dataset_names, args, **kwargs):
+        if str(split) != "dev":
+            return _get_dataloader(split, dataset_names, args, **kwargs)
+        return [_get_dataloader(split, name, args, **kwargs) for name in val_names]
+
+    upstream_train.get_dataloader = get_dataloader_multi
+
+    # only the phrase head has subtitle supervision
+    if "youtube" in args.datasets.split(","):
+        ValidationMetricsModel.levels = ("sentence",)
 
     # Defaults describe the *basic baseline*: every optional trick off, so each
     # later experiment turns exactly one back on. This deliberately departs from
@@ -346,6 +370,7 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"\n              {dgs_data.BACKUP}"
           f"\n  phrase gold {mine.phrase}"
           f"\n  run/wandb   {run_name}  ->  project {args.wandb_project}"
+          f"\n  validate on {args.val_datasets}  (first is in-domain, selects the checkpoint)"
           f"\n  training    batch {args.batch_size}  epochs {args.epochs}  "
           f"patience {args.patience}  lr {args.learning_rate:g}  {args.optimizer}"
           f"\n  tricks OFF  dice {args.dice_loss_weight:g}  "

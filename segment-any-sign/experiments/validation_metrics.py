@@ -81,6 +81,11 @@ class ValidationMetricsModel(PoseTaggingModel):
     #: upstream's unweighted NLL. Set before the model is constructed.
     class_weights = None
 
+    #: names of the validation dataloaders, in the order they are passed to
+    #: `trainer.fit`. The **first is in-domain** and supplies the selection
+    #: metric; the rest are logged for information only.
+    val_dataset_names = ("dev",)
+
     #: which heads carry supervision. Subtitle pretraining sets ("sentence",):
     #: masking the sign loss would still compute it, and scoring a head with no
     #: gold wastes a decode per clip.
@@ -231,26 +236,36 @@ class ValidationMetricsModel(PoseTaggingModel):
         self._log_collected(self._train_collected, "train")
 
     def on_validation_epoch_start(self) -> None:
-        self._val_collected = _empty()
+        self._val_collected = {name: _empty() for name in self.val_dataset_names}
 
-    def validation_step(self, batch, *args):
-        # Upstream runs two forwards per validation batch — one in `step` for the
-        # loss, one in `validation_step` for IoU — and ours would be a third. On
-        # whole dev videos that is the single largest cost in a run, so compute it
-        # once and let both reuse it through the cache in `forward` above. No
-        # upstream logic is duplicated; it simply gets handed the tensor it would
-        # otherwise recompute.
+    def validation_step(self, batch, batch_idx=0, dataloader_idx=0):
+        """One forward per batch, metrics tagged by which validation set it came from.
+
+        Upstream's own `validation_step` is deliberately not called: it logs
+        `validation_sign_iou` and friends under fixed names, which collide across
+        dataloaders and would be silently averaged over datasets of different
+        domains. Our metrics are a superset of those, and are tagged per set.
+        """
+        name = self.val_dataset_names[dataloader_idx] \
+            if dataloader_idx < len(self.val_dataset_names) else str(dataloader_idx)
+
         with torch.no_grad():
             log_probs = super().forward(batch["pose"],
                                         timestamps=batch.get("timestamps"))
+        # let `step` reuse the forward rather than recompute it for the loss
         self._cached_log_probs = log_probs
         try:
-            loss = super().validation_step(batch, *args)
+            loss = self.step(batch, name=f"validation_{name}")
         finally:
             self._cached_log_probs = None
 
-        self._accumulate(batch, self._val_collected, log_probs=log_probs)
+        self._accumulate(batch, self._val_collected[name], log_probs=log_probs)
         return loss
 
     def on_validation_epoch_end(self) -> None:
-        self._log_collected(self._val_collected, "validation")
+        for index, name in enumerate(self.val_dataset_names):
+            self._log_collected(self._val_collected[name], f"validation_{name}")
+            if index == 0:
+                # the in-domain set also supplies the unqualified names the
+                # trainer monitors for checkpointing and early stopping
+                self._log_collected(self._val_collected[name], "validation")
