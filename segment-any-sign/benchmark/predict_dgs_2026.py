@@ -288,6 +288,8 @@ def main() -> None:
         "thresholds": {},
         "source": args.source,
         "overlap": args.overlap,
+        "velocity": velocity,
+        "pose_dims": list(pose_dims),
         "phrase_gold": args.phrase,
         "pipeline": "sign_language_segmentation main (dist/2026)",
         "clips": clips,

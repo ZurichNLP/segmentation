@@ -121,7 +121,10 @@ def label_stats(split: str, samples: int = 20, num_frames: int = 1024,
 
     from experiments.dgs_dataset import SharedDGSDataset
 
-    dataset = SharedDGSDataset(split=Split(split), num_frames=num_frames)
+    # velocity affects only pose dims, not labels, but pin it so the report
+    # cannot drift from what the run uses
+    dataset = SharedDGSDataset(split=Split(split), num_frames=num_frames,
+                               velocity=False)
     if len(dataset) == 0:
         return {}
 

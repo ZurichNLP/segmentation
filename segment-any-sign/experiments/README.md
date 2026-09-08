@@ -51,7 +51,7 @@ This is the candidate list to ablate.
 | pose cleanup | own `pose_utils.pose_hide_legs` — zeroes 8 leg points **and their confidences** | `preprocess_pose`: `pose_hide_legs` → `reduce_holistic` → `normalize_mean_std` (pose-anonymization) |
 | face | dropped | dropped |
 | extra features | E4 only: optical flow + 3D hand normalisation | velocity (fps-normalised), always on |
-| input | 3 components, xyz | 50 joints × 6 dims |
+| model input | **75 joints x 3** (x, y, z). Body 33 + 21 + 21 hands: `pose_hide_legs` *zeroes* the 8 leg points but keeps them. E4 appends optical flow as a 4th channel | **50 joints x 6** (x, y, z + velocity). `reduce_holistic` *removes* the legs, leaving 8 body points — shoulders, elbows, wrists, hips — plus 21 + 21 hands, so 42 of 50 joints are hands |
 
 ### Labels
 

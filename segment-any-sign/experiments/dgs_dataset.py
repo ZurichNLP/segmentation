@@ -39,7 +39,10 @@ class SharedDGSDataset(BaseSegmentationDataset):
         self,
         split: Split = Split.TRAIN,
         num_frames: int = 1024,
-        velocity: bool = True,
+        # off by default, matching train.py. A velocity-on model takes 50x6 and a
+        # velocity-off one 50x3, so a mismatch is fatal rather than silent — but
+        # the defaults should still agree wherever the dataset is built directly.
+        velocity: bool = False,
         fps_aug: bool = True,
         frame_dropout: float = 0.15,
         body_part_dropout: float = 0.1,
