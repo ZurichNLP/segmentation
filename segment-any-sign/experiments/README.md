@@ -35,7 +35,7 @@ the *model*; it may not change how it is scored. Final numbers come from
 `benchmark/score.py` on the same DGS test clips, so an experiment row and a
 benchmark row are directly comparable.
 
-Each run also reports **dev** numbers — test is for the final table only.
+Each run reports **dev** numbers here — test is for the final benchmark table only.
 
 ## What differs 2023 vs 2026, apart from the architecture
 
@@ -83,17 +83,10 @@ This is the candidate list to ablate.
 | selection metric | dev loss, early stopping | harmonic mean of sign and phrase IoU |
 | reported | frame F1, IoU, % | IoU only |
 
-Roughly ordered by expected effect from the 2026 README's own account: `fps_aug`
-is called essential (0.58→0.49 without it), `frame_dropout` essential, Dice worth
-+2pp sign IoU, velocity +1–2pp. Those are its numbers against its own baseline,
-not ours — establishing them against a common baseline is the point of this
-directory.
-
-## Ablations
+## Ablations on the Public DGS Corpus
 
 Filled in as runs land. **Validation numbers**, scored by `benchmark/score.py`
-through the same protocol the benchmark uses. Ablations stay on dev: test is for
-the single model finally reported.
+through the same protocol the benchmark uses. Ablations stay on dev.
 
 The 2026 shipped checkpoint is the reference, not a row we produced.
 
