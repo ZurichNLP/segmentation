@@ -12,9 +12,9 @@ later experiment turns exactly one trick back on:
 
     --batch_size 64          (upstream 8)      --dice_loss_weight 0   (1.5)
     --epochs 500             (200)             --frame_dropout 0      (0.15)
-    --patience 10% of epochs (10)              --body_part_dropout 0  (0.1)
-    --learning_rate 1e-3     (1e-3, pinned)    --attn_dropout 0       (0.1)
-    velocity off             (on, unswitchable)
+    --learning_rate 1e-3     (1e-3, pinned)    --body_part_dropout 0  (0.1)
+    velocity off             (on, unswitchable) --attn_dropout 0      (0.1)
+    fps_aug off              (on, unswitchable) early stopping off     (patience 10)
 
 `fps_aug` stays on: upstream calls it essential, and disabling it also switches
 label construction from `create_bio_from_times` to `create_bio`, which would
@@ -100,6 +100,13 @@ def main() -> None:
                       help="append fps-normalised velocity features (3->6 dims). "
                            "Upstream declares --velocity as store_true with "
                            "default True, so it cannot be disabled there at all")
+    ours.add_argument("--early-stop", choices=["on", "off"], default="off",
+                      help="stop when the selection metric plateaus. Off by "
+                           "default: OneCycle anneals over --epochs, so stopping "
+                           "early leaves the schedule near peak LR and never "
+                           "visits its low-LR phase")
+    ours.add_argument("--fps-aug", choices=["on", "off"], default="off",
+                      help="random 25-50 fps resampling per training clip")
     ours.add_argument("--class-weights", default="auto",
                       choices=["auto", "inverse", "none"],
                       help="loss class weighting. auto (default) = 2023's inverse "
@@ -179,6 +186,29 @@ def main() -> None:
         args.patience = max(1, round(0.1 * args.epochs))
 
     args.velocity = mine.velocity == "on"
+    args.fps_aug = mine.fps_aug == "on"
+
+    # `fps_aug` upstream controls *two* things: the resampling, and which label
+    # builder runs (`create_bio_from_times` when on, `create_bio` when off).
+    # Turning augmentation off would therefore silently change the gold, and
+    # disagree with the timestamp-based gold `benchmark/predict_dgs_2026.py`
+    # builds at eval. Make the label rule the same either way, so the flag means
+    # only what its name says.
+    import numpy as np
+
+    from sign_language_segmentation.datasets import common as _common
+    from sign_language_segmentation.utils.bio import create_bio_from_times
+
+    def _create_bio_from_times_shim(annotations, num_frames, fps):
+        times_ms = np.arange(num_frames, dtype=np.float32) / fps * 1000
+        return create_bio_from_times(annotations, times_ms)
+
+    _common.create_bio = _create_bio_from_times_shim
+
+    # Upstream always installs EarlyStopping with `patience`; making patience
+    # exceed the epoch budget is how it is disabled without patching the loop.
+    if mine.early_stop == "off":
+        args.patience = args.epochs + 1
 
     # 2026 dropped 2023's class weighting when it added the Dice term, so with
     # Dice off the loss would otherwise be a plain unweighted NLL — neither
@@ -296,6 +326,8 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"body_part_dropout {args.body_part_dropout:g}  "
           f"attn_dropout {args.attn_dropout:g}  velocity {args.velocity}"
           f"\n  tricks ON   fps_aug {args.fps_aug}  num_frames {args.num_frames}"
+          f"\n  schedule    {args.epochs} epochs, early stop "
+          f"{'off (OneCycle runs to completion)' if mine.early_stop == 'off' else f'patience {args.patience}'}"
           f"\n  loss        {'NLL' if args.class_weighting == 'none' else 'NLL + inverse class weights (2023)'}"
           f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
           + (f"\n  LIMIT       {args.limit} clips per split — NOT a reportable run"
