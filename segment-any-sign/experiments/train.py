@@ -107,10 +107,10 @@ def main() -> None:
                            "upstream's behaviour, one window per video per epoch "
                            "regardless of length, which oversamples short videos "
                            "by orders of magnitude per frame")
-    ours.add_argument("--val-every", type=int, default=100,
-                      help="validate every N optimiser steps rather than every "
-                           "epoch. An epoch is 603 steps on YouTube and 10 on "
-                           "DGS, so epochs are useless as a validation unit")
+    ours.add_argument("--val-every", type=int, default=None,
+                      help="log all train and validation metrics every N steps. "
+                           "Default: 1%% of the run, capped at one epoch so a "
+                           "small dataset still gets an evaluation every epoch")
     ours.add_argument("--val-datasets", default=None,
                       help="comma-separated datasets to validate on. The FIRST is "
                            "in-domain and supplies the selection metric; the rest "
@@ -230,7 +230,7 @@ def main() -> None:
         ValidationMetricsModel.levels = ("sentence",)
     if mine.max_steps is None:
         # YouTube is ~40x the data, so it gets a longer budget by default
-        mine.max_steps = 10000 if pretraining else 5000
+        mine.max_steps = 20000 if pretraining else 5000
 
     # Defaults describe the *basic baseline*: every optional trick off, so each
     # later experiment turns exactly one back on. This deliberately departs from
@@ -253,13 +253,23 @@ def main() -> None:
     # Budget in steps, not epochs. OneCycle is sized by epochs x steps_per_epoch,
     # so epochs is derived to make the schedule span exactly the requested steps —
     # otherwise a run stops mid-anneal, which is what early stopping used to do.
-    if "--epochs" not in rest and mine.max_steps:
+    if ("--epochs" not in rest and mine.max_steps) or mine.val_every is None:
         clips = dataset_size(args)
         steps_per_epoch = math.ceil(clips / args.batch_size)
-        args.epochs = max(1, math.ceil(mine.max_steps / steps_per_epoch))
-        print(f"\n{clips:,} training clips / batch {args.batch_size} = "
-              f"{steps_per_epoch:,} steps per epoch"
-              f"  ->  {args.epochs} epochs for ~{mine.max_steps:,} steps")
+
+        if "--epochs" not in rest and mine.max_steps:
+            args.epochs = max(1, math.ceil(mine.max_steps / steps_per_epoch))
+            print(f"\n{clips:,} training clips / batch {args.batch_size} = "
+                  f"{steps_per_epoch:,} steps per epoch"
+                  f"  ->  {args.epochs} epochs for ~{mine.max_steps:,} steps")
+
+        # Evaluate 100 times over the run, but never less often than once per
+        # epoch: 1% of DGS's 5,000 steps is 50, which would be five epochs.
+        if mine.val_every is None:
+            mine.val_every = max(1, min(mine.max_steps // 100, steps_per_epoch))
+
+    # sample train metrics ten times per evaluation, so both curves are smooth
+    ValidationMetricsModel.metrics_every_n_steps = max(1, mine.val_every // 10)
 
     # patience tracks the budget rather than being a fixed number of epochs
     if "--patience" not in rest:

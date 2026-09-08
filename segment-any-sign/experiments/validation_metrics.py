@@ -223,17 +223,19 @@ class ValidationMetricsModel(PoseTaggingModel):
                      (mf1s.get("sign", 0.0) + mf1s.get("phrase", 0.0)) / 2,
                      prog_bar=(prefix == "validation"))
 
+    _train_collected = None
+
     def on_train_epoch_start(self) -> None:
-        self._train_collected = _empty()
+        if self._train_collected is None:
+            self._train_collected = _empty()
 
     def training_step(self, batch, *args):
         loss = super().training_step(batch, *args)
+        if self._train_collected is None:
+            self._train_collected = _empty()
         if self.global_step % self.metrics_every_n_steps == 0:
             self._accumulate(batch, self._train_collected)
         return loss
-
-    def on_train_epoch_end(self) -> None:
-        self._log_collected(self._train_collected, "train")
 
     def on_validation_epoch_start(self) -> None:
         self._val_collected = {name: _empty() for name in self.val_dataset_names}
@@ -263,6 +265,13 @@ class ValidationMetricsModel(PoseTaggingModel):
         return loss
 
     def on_validation_epoch_end(self) -> None:
+        # train metrics are flushed here so both sides share one cadence: an
+        # epoch is 603 steps on YouTube and 10 on DGS, so epoch-end would put
+        # the two curves on incomparable x-axes
+        if self._train_collected is not None:
+            self._log_collected(self._train_collected, "train")
+            self._train_collected = _empty()
+
         for index, name in enumerate(self.val_dataset_names):
             self._log_collected(self._val_collected[name], f"validation_{name}")
             if index == 0:
