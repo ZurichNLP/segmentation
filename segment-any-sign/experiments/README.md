@@ -115,14 +115,40 @@ The 2026 shipped checkpoint is the reference, not a row we produced.
 | `01_basic_lr3e-6` | " | 0.063 | 0.076 | 0.346 | 9.619 | 0.065 | 0.197 | 0.436 | 0.036 | 8.351 | 0.000 |
 | `01_basic_lr1e-6` | " | 0.038 | 0.047 | 0.351 | 3.000 | 0.053 | 0.199 | 0.436 | 0.043 | 10.217 | 0.000 |
 
-Bold marks the best in each section; `%` is best nearest **1**. "All tricks" is
-dice loss, the three dropouts and velocity — `fps_aug` is on throughout. Every
-`01_basic` run is identical apart from the learning rate: from scratch, 500
-epochs, patience 50, batch 64, `adamw-onecycle`, selected on
-`validation_mean_mf1s`. None hit the 5-hour cap; runtimes ran 21 min (lr 1e-2,
-best epoch 20) to 4h14m (lr 1e-5, best epoch 482). At 3e-6 and below the model
-never improved past its first validation, so those rows bracket the sweep rather
-than measure a learning rate.
-
-Predictions live in `experiments/predictions/` (dev), kept apart from
+Bold marks the best within each group; `%` is best nearest **1**. Predictions
+live in `experiments/predictions/` (dev), kept apart from
 `benchmark/predictions/` (test) so the two can never be scored together.
+
+### Baselines
+
+The 2026 shipped checkpoint against the same architecture trained by us — all
+tricks on, batch 32, lr 1e-3, 500 epochs, no hyperparameter search, selected on
+`validation_mean_mf1s` rather than IoU.
+
+**The two split perfectly by level**: shipped takes every Sign column, ours takes
+every Phrase column. Phrase `%` goes 0.553 → 0.744 and phrase mF1S 0.051 → 0.204,
+while sign IoU slips 0.610 → 0.598. Which half of that is the selection metric and
+which is our training is not yet separated — that needs a run selected on
+`hm_iou` under otherwise identical settings.
+
+### Learning-rate sweep
+
+Ten runs differing only in learning rate, spanning four decades. Every trick is
+off — dice loss, all three dropouts and velocity — leaving `fps_aug` on, at batch
+64 with `adamw-onecycle`, 500 epochs and patience 50. None hit the 5-hour cap;
+runtimes ran 21 min (lr 1e-2, best epoch 20) to 4h14m (lr 1e-5, best epoch 482).
+
+**The optimum is inside the range and broad.** By the selection metric, mean of
+sign and phrase mF1S: 5e-4 gives 0.382, 3e-4 gives 0.381, 1e-3 gives 0.375. Those
+three are a plateau, not a ranking — with no seed replicates a 0.007 spread is
+not a result. Both tails fall away monotonically, so no wider sweep is needed.
+
+Within the plateau the metrics disagree, in a way worth keeping: **1e-3** leads
+IoU (hm 0.688) while **3e-4** emits close to the right number of segments at both
+levels (sign `%` 1.026, phrase `%` 1.036), which is what mF1S rewards and IoU
+cannot see. **5e-4** tops mean mF1S but over-segments phrases (`%` 1.280), so its
+lead rests on a metric its own `%` column undercuts.
+
+At 3e-6 and below the model never improved past its first validation — best epoch
+1, phrase mF1S 0.000, and eight to ten times too many phrase segments. Those two
+rows bracket the sweep rather than measure a learning rate.
