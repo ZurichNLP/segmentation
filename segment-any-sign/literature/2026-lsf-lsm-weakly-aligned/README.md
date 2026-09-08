@@ -7,9 +7,7 @@
 
 ## Why it is here
 
-Applies our segmentation models to LSF and LSM. Adds Mexican Sign Language to
-the set of languages the model has been tried on, and works from weakly aligned
-corpora — a different failure mode from the edge cases in our proposal.
+Applies our segmentation models to LSF and LSM. Adds Mexican Sign Language to the set of languages the model has been tried on, and works from weakly aligned corpora — a different failure mode from the edge cases in our proposal.
 
 ## Notes
 

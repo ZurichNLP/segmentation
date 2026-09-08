@@ -51,20 +51,13 @@ Public DGS Corpus test — 9 documents, **14 annotated videos** of 17.
 | *— our experimental results below —* | | | | | | | | | | | |
 | `00_2026_baseline` | ours | 0.510 | 0.783 | 0.597 | 1.071 | 0.391 | 0.549 | 0.886 | 0.825 | **0.771** | **0.200** |
 
-`*` marks the 2023 paper's tuned decoding, which moves only IoU and `%` — hence
-`—` for the decoding-independent F1. `F1-mi` and `mF1S` are unpublished by anyone.
+`*` marks the 2023 paper's tuned decoding, which moves only IoU and `%` — hence `—` for the decoding-independent F1. `F1-mi` and `mF1S` are unpublished by anyone.
 
 **Hands-On** is the only follow-up on this corpus. See [`../literature/2025-hands-on/`](../literature/2025-hands-on/).
 
 ## Protocol
 
-**The three dropped clips.** `1180022_b`, `1187154_a`, `1419122_a` are the
-unannotated partner in a two-signer conversation — those documents carry
-`Deutsche_Übersetzung` and `Lexem_Gebärde` tiers for one participant only. A
-person is on camera but is the listener, and every model correctly predicts almost
-nothing. With no gold and no prediction each scores ~1.0 throughout: sign IoU
-0.679 across 17 against 0.611 across 14. `score.py --all-clips` restores the
-17-video set. Upstream's 2026 eval independently drops the same three.
+**The three dropped clips.** `1180022_b`, `1187154_a`, `1419122_a` are the unannotated partner in a two-signer conversation — those documents carry `Deutsche_Übersetzung` and `Lexem_Gebärde` tiers for one participant only. A person is on camera but is the listener, and every model correctly predicts almost nothing. With no gold and no prediction each scores ~1.0 throughout: sign IoU 0.679 across 17 against 0.611 across 14. `score.py --all-clips` restores the 17-video set. Upstream's 2026 eval independently drops the same three.
 
 **What counts as a phrase.** The two codebases disagree:
 
@@ -73,8 +66,7 @@ nothing. With no gold and no prediction each scores ~1.0 throughout: sign IoU
 | v2023 | first gloss → last gloss of a sentence | `data.py::build_classes_vectors` |
 | 2026 | the `Deutsche_Übersetzung` tier's timeslots | `datasets/dgs/dataset.py:127` |
 
-Sentence bounds are wider; the gloss extent sits inside them, trimming lead-in and
-trail-out. Phrase IoU against both, same predictions:
+Sentence bounds are wider; the gloss extent sits inside them, trimming lead-in and trail-out. Phrase IoU against both, same predictions:
 
 | Model | vs gloss extent (**benchmark**) | vs sentence bounds |
 |---|---|---|
@@ -97,50 +89,27 @@ We use the **2023 gloss extent** for every row in our benchmark table above.
 | E4s | sign | 0.5924 | 0.59 | 0.6280 | 0.63 |
 | E4s | phrase | 0.6258 | 0.62 | 0.7902 | 0.79 |
 
-IoU is compared against the tuned-decoding rows (E1s\*/E4s\*), which is what we
-run; frame F1 is decoding-independent.
+IoU is compared against the tuned-decoding rows (E1s\*/E4s\*), which is what we run; frame F1 is decoding-independent.
 
 `predict_dgs_2023.py` **drives the original v2023 code**. A few noted details:
 
-- `tfds_dataset.py` imports **its own `pose_utils`**, not pose-format's — its
-  `pose_hide_legs` zeroes eight leg points *and* their confidences. The
-  same-named pose-format helper costs ~0.07 frame F1.
-- **`pose-format` version matters**: v2023 pinned `>=0.3.2`, 0.9.0 changes the
-  scores. `sas2023` pins 0.3.2.
-- Two different golds: `floor(t * fps)` inclusive for IoU and `%`, `build_bio`'s
-  walk (effectively `ceil`) for frame metrics.
-- **Frame F1 compares argmax of raw probabilities against `build_bio` labels**,
-  never decoded segments.
-- Its macro F1 passes **no label set**, averaging only over present classes;
-  `score.py` passes `labels=None` to match.
-- `<cmdp:Task>Joke</cmdp:Task>` documents are dropped, taking the test split from
-  10 documents to 9.
+- `tfds_dataset.py` imports **its own `pose_utils`**, not pose-format's — its `pose_hide_legs` zeroes eight leg points *and* their confidences. The same-named pose-format helper costs ~0.07 frame F1.
+- **`pose-format` version matters**: v2023 pinned `>=0.3.2`, 0.9.0 changes the scores. `sas2023` pins 0.3.2.
+- Two different golds: `floor(t * fps)` inclusive for IoU and `%`, `build_bio`'s walk (effectively `ceil`) for frame metrics.
+- **Frame F1 compares argmax of raw probabilities against `build_bio` labels**, never decoded segments.
+- Its macro F1 passes **no label set**, averaging only over present classes; `score.py` passes `labels=None` to match.
+- `<cmdp:Task>Joke</cmdp:Task>` documents are dropped, taking the test split from 10 documents to 9.
 
 ### The 2026 model (unconfirmed)
 
-[dist/2026](https://github.com/sign-language-processing/segmentation/blob/main/dist/2026/README.md) — CNN-UNet + RoPE transformer, trained on DGS Corpus
-3.0.0-uzh-document, shipped as `dist/2026/model.safetensors`.
+[dist/2026](https://github.com/sign-language-processing/segmentation/blob/main/dist/2026/README.md) — CNN-UNet + RoPE transformer, trained on DGS Corpus 3.0.0-uzh-document, shipped as `dist/2026/model.safetensors`.
 
-Reproduces under *its* protocol: `--phrase sentence` gives phrase IoU 0.922
-against a published 0.925, same 14 clips. Sign is 0.611 against 0.652 either way
-(the sign definition never changed); the likeliest remaining difference is pose
-provenance — upstream reads a `poses_dir` of MediaPipe Holistic poses, we read the
-archived `.pose` downloads, and sign boundaries are the more extraction-sensitive
-level. Unconfirmed.
+Reproduces under *its* protocol: `--phrase sentence` gives phrase IoU 0.922 against a published 0.925, same 14 clips. Sign is 0.611 against 0.652 either way (the sign definition never changed); the likeliest remaining difference is pose provenance — upstream reads a `poses_dir` of MediaPipe Holistic poses, we read the archived `.pose` downloads, and sign boundaries are the more extraction-sensitive level. Unconfirmed.
 
-Metrics were checked against their `evaluate.py`: macro frame F1 with no label
-set, `segment_IoU` identical to our `global_iou`, argmax decoding, gold from BIO
-labels, mean over clips. Three corrections were needed, each a trap for the next
-model:
+Metrics were checked against their `evaluate.py`: macro frame F1 with no label set, `segment_IoU` identical to our `global_iou`, argmax decoding, gold from BIO labels, mean over clips. Three corrections were needed, each a trap for the next model:
 
 1. **It does not use TFDS** — its loader reads raw `.pose` and `.eaf` directly.
-2. **fps.** The TFDS build baked in a 25fps downsample; the model publishes at 50.
-   The 50fps originals were already in the download archive, keyed by
-   `original_fname` in each `.INFO` sidecar — check there before rebuilding a
-   config at ~144 GB and hours. Worth +0.06 sign IoU.
+2. **fps.** The TFDS build baked in a 25fps downsample; the model publishes at 50. The 50fps originals were already in the download archive, keyed by `original_fname` in each `.INFO` sidecar — check there before rebuilding a config at ~144 GB and hours. Worth +0.06 sign IoU.
 3. **Phrase definition**, above.
 
-**IoU alone can mislead.** This model selects on IoU and reports nothing else. At
-phrase level it reaches 0.922 IoU with `%` at 0.437 — nearly the right frames from
-**under half** the segments, merging adjacent sentences. IoU cannot see this: one
-prediction spanning two gold phrases scores as well as two correct ones. Worth further manual investigation.
+**IoU alone can mislead.** This model selects on IoU and reports nothing else. At phrase level it reaches 0.922 IoU with `%` at 0.437 — nearly the right frames from **under half** the segments, merging adjacent sentences. IoU cannot see this: one prediction spanning two gold phrases scores as well as two correct ones. Worth further manual investigation.

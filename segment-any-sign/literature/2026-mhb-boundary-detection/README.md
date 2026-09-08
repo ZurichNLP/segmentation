@@ -8,22 +8,16 @@
 
 ## Why it is here
 
-Follow-up work on boundary detection in continuous signing, for ASL. It
-evaluates on the ASLLRP corpus, which is the source of our NCSLGR data — see
-[`../../datasets/ncslgr/`](../../datasets/ncslgr/).
+Follow-up work on boundary detection in continuous signing, for ASL. It evaluates on the ASLLRP corpus, which is the source of our NCSLGR data — see [`../../datasets/ncslgr/`](../../datasets/ncslgr/).
 
-Note **Carol Neidle** is an author on the workshop version. She leads the ASLLRP,
-so this is the corpus's own group working on our task.
+Note **Carol Neidle** is an author on the workshop version. She leads the ASLLRP, so this is the corpus's own group working on our task.
 
 ## Notes
 
 From the abstract (not yet verified against the full paper):
 
 - Evaluated on the ASLLRP corpus.
-- The sign recognition model is trained on both citation-form isolated signs and
-  signs pre-segmented from continuous signing using manual annotations.
-- Uses a handshape classifier over 87 categories, built by integrating and
-  normalising several existing datasets.
+- The sign recognition model is trained on both citation-form isolated signs and signs pre-segmented from continuous signing using manual annotations.
+- Uses a handshape classifier over 87 categories, built by integrating and normalising several existing datasets.
 
-_TODO: read for the metrics, splits, and whether the numbers are comparable to
-ours. Cite the LREC version, not the preprint._
+_TODO: read for the metrics, splits, and whether the numbers are comparable to ours. Cite the LREC version, not the preprint._

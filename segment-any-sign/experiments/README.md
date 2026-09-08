@@ -1,7 +1,6 @@
 # Experiments
 
-Training and finetuning. [`../benchmark/`](../benchmark/) stays inference-only on
-published checkpoints; anything with a training loop lives here.
+Training and finetuning. [`../benchmark/`](../benchmark/) stays inference-only on published checkpoints; anything with a training loop lives here.
 
 ## Basic model
 
@@ -19,28 +18,17 @@ flowchart LR
     D --> F
 ```
 
-The two temporal U-Nets learn progressively wider local motion patterns while
-restoring the original frame rate after each block. Together they give each
-frame an approximately 331-frame receptive field (about 6.6 seconds at 50 fps).
-The Transformer then relates every frame to the complete training window. Both
-heads retain the original temporal resolution and predict one BIO distribution
-per input frame. Full validation and test videos are processed as independent
-1024-frame Transformer chunks.
+The two temporal U-Nets learn progressively wider local motion patterns while restoring the original frame rate after each block. Together they give each frame an approximately 331-frame receptive field (about 6.6 seconds at 50 fps). The Transformer then relates every frame to the complete training window. Both heads retain the original temporal resolution and predict one BIO distribution per input frame. Full validation and test videos are processed as independent 1024-frame Transformer chunks.
 
 ## Rules
 
-The [benchmarking rules](../benchmark/README.md#rules) apply unchanged: one
-evaluation protocol for every run, inherited from 2023. An experiment may change
-the *model*; it may not change how it is scored. Final numbers come from
-`benchmark/score.py` on the same DGS test clips, so an experiment row and a
-benchmark row are directly comparable.
+The [benchmarking rules](../benchmark/README.md#rules) apply unchanged: one evaluation protocol for every run, inherited from 2023. An experiment may change the *model*; it may not change how it is scored. Final numbers come from `benchmark/score.py` on the same DGS test clips, so an experiment row and a benchmark row are directly comparable.
 
 Each run reports **dev** numbers here — test is for the final benchmark table only.
 
 ## What differs 2023 vs 2026, apart from the architecture
 
-Read off both codebases (`v2023 src/` and `main sign_language_segmentation/`).
-This is the candidate list to ablate.
+Read off both codebases (`v2023 src/` and `main sign_language_segmentation/`). This is the candidate list to ablate.
 
 ### Data and features
 
@@ -85,8 +73,7 @@ This is the candidate list to ablate.
 
 ## Ablations on the Public DGS Corpus
 
-Filled in as runs land. **Validation numbers**, scored by `benchmark/score.py`
-through the same protocol the benchmark uses. Ablations stay on dev.
+Filled in as runs land. **Validation numbers**, scored by `benchmark/score.py` through the same protocol the benchmark uses. Ablations stay on dev.
 
 The 2026 shipped checkpoint is the reference, not a row we produced.
 
@@ -108,40 +95,53 @@ The 2026 shipped checkpoint is the reference, not a row we produced.
 | `01_basic_lr3e-6` | " | 0.063 | 0.076 | 0.346 | 9.619 | 0.065 | 0.197 | 0.436 | 0.036 | 8.351 | 0.000 |
 | `01_basic_lr1e-6` | " | 0.038 | 0.047 | 0.351 | 3.000 | 0.053 | 0.199 | 0.436 | 0.043 | 10.217 | 0.000 |
 
-Bold marks the best within each group; `%` is best nearest **1**. Predictions
-live in `experiments/predictions/` (dev), kept apart from
-`benchmark/predictions/` (test) so the two can never be scored together.
+Bold marks the best within each group; `%` is best nearest **1**. Predictions live in `experiments/predictions/` (dev), kept apart from `benchmark/predictions/` (test) so the two can never be scored together.
 
 ### Baselines
 
-The 2026 shipped checkpoint against the same architecture trained by us — all
-tricks on, batch 32, lr 1e-3, 500 epochs, no hyperparameter search, selected on
-`validation_mean_mf1s` rather than IoU.
+The 2026 shipped checkpoint against the same architecture trained by us — all tricks on, batch 32, lr 1e-3, 500 epochs, no hyperparameter search, selected on `validation_mean_mf1s` rather than IoU.
 
-**The two split perfectly by level**: shipped takes every Sign column, ours takes
-every Phrase column. Phrase `%` goes 0.553 → 0.744 and phrase mF1S 0.051 → 0.204,
-while sign IoU slips 0.610 → 0.598. Which half of that is the selection metric and
-which is our training is not yet separated — that needs a run selected on
-`hm_iou` under otherwise identical settings.
+**The two split perfectly by level**: shipped takes every Sign column, ours takes every Phrase column. Phrase `%` goes 0.553 → 0.744 and phrase mF1S 0.051 → 0.204, while sign IoU slips 0.610 → 0.598. Which half of that is the selection metric and which is our training is not yet separated — that needs a run selected on `hm_iou` under otherwise identical settings.
 
 ### Learning-rate sweep
 
-Ten runs differing only in learning rate, spanning four decades. Every trick is
-off — dice loss, all three dropouts and velocity — leaving `fps_aug` on, at batch
-64 with `adamw-onecycle`, 500 epochs and patience 50. None hit the 5-hour cap;
-runtimes ran 21 min (lr 1e-2, best epoch 20) to 4h14m (lr 1e-5, best epoch 482).
+Ten runs differing only in learning rate, spanning four decades. Every trick is off — dice loss, all three dropouts and velocity — leaving `fps_aug` on, at batch 64 with `adamw-onecycle`, 500 epochs and patience 50. None hit the 5-hour cap; runtimes ran 21 min (lr 1e-2, best epoch 20) to 4h14m (lr 1e-5, best epoch 482).
 
-**The optimum is inside the range and broad.** By the selection metric, mean of
-sign and phrase mF1S: 5e-4 gives 0.382, 3e-4 gives 0.381, 1e-3 gives 0.375. Those
-three are a plateau, not a ranking — with no seed replicates a 0.007 spread is
-not a result. Both tails fall away monotonically, so no wider sweep is needed.
+**The optimum is inside the range and broad.** By the selection metric, mean of sign and phrase mF1S: 5e-4 gives 0.382, 3e-4 gives 0.381, 1e-3 gives 0.375. Those three are a plateau, not a ranking — with no seed replicates a 0.007 spread is not a result. Both tails fall away monotonically, so no wider sweep is needed.
 
-Within the plateau the metrics disagree, in a way worth keeping: **1e-3** leads
-IoU (hm 0.688) while **3e-4** emits close to the right number of segments at both
-levels (sign `%` 1.026, phrase `%` 1.036), which is what mF1S rewards and IoU
-cannot see. **5e-4** tops mean mF1S but over-segments phrases (`%` 1.280), so its
-lead rests on a metric its own `%` column undercuts.
+Within the plateau the metrics disagree, in a way worth keeping: **1e-3** leads IoU (hm 0.688) while **3e-4** emits close to the right number of segments at both levels (sign `%` 1.026, phrase `%` 1.036), which is what mF1S rewards and IoU cannot see. **5e-4** tops mean mF1S but over-segments phrases (`%` 1.280), so its lead rests on a metric its own `%` column undercuts.
 
-At 3e-6 and below the model never improved past its first validation — best epoch
-1, phrase mF1S 0.000, and eight to ten times too many phrase segments. Those two
-rows bracket the sweep rather than measure a learning rate.
+At 3e-6 and below the model never improved past its first validation — best epoch 1, phrase mF1S 0.000, and eight to ten times too many phrase segments. Those two rows bracket the sweep rather than measure a learning rate.
+
+## Pretraining on YouTube
+
+Stage one of the staged design borrowed from [Segment Any Text](../literature/segment-any-text/) — weak, plentiful labels first, precise and scarce ones after. Subtitle timings stand in for their newline-derived boundaries: no alignment step, no filtering for subtitle quality, straight to BIO. The [ACL SRW paper](../literature/2025-temporal-boundary-identification/) shows that recipe trains.
+
+**Phrase level only.** A subtitle cue is a translation unit, not a sign, so this stage can supervise the phrase head and nothing else. The sign head has no signal here.
+
+### The data
+
+`/shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_VGG` — 2.8 TB.
+
+| | |
+|---|---|
+| pose files | 38,857 `.pose`, MediaPipe Holistic |
+| subtitle files | 38,878 `.vtt` |
+| estimated duration | **~3,700 hours** (median 3.8 min, mean 5.7 min, max 49 min per video) |
+| estimated cues | **~2.4M** (median 33 per video, median cue 4.3 s) |
+| subtitle languages | en 16,110, ase 3,357, hu 1,685, pl 1,583, ja 1,063, de 1,002, fr 921, it 882, es 812, ru 706, … |
+
+For scale: DGS train is 91 hours and 61k phrases, so this is **~40x the hours** and **~40x the phrase-level units**.
+
+### Four things that differ from DGS, and need handling
+
+- **Variable frame rate.** DGS is uniformly 50 fps; here the sample shows 14.6, 19.9, 24.0, 25.0, 29.9 and more. RoPE takes timestamps in seconds so the model itself is fine, but every per-clip `fps` must come from the file rather than a constant, and `fps_aug` is arguably redundant when the corpus already varies.
+- **A different MediaPipe version.** `FACE_LANDMARKS` has **478** points, not DGS's 468, and there is an extra `POSE_WORLD_LANDMARKS` component. `preprocess_pose` keeps only body and hands, so both are dropped — but that is luck rather than design, and worth asserting on.
+- **The language code names the subtitle, not the signing.** `--6bmFM9wT4.ase.vtt` is labelled ASL, but 16,110 files are `en` — English text over signed video. The metadata CSV is 39,197 rows of `???`, so it carries no language label.
+- **Pose quality is unknown.** DGS is studio footage; this is the open web. The missing-keypoint rate will be higher than DGS's 2.2%, which is where "a zeroed keypoint reads as the mean pose" starts to matter.
+
+### Runs
+
+| # | run | change | phrase IoU | phrase % | phrase mF1S |
+|---|---|---|---|---|---|
+| | | _(nothing yet)_ | | | |

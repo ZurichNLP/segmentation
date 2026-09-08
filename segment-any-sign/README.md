@@ -1,8 +1,6 @@
 # segment-any-sign
 
-Project workspace for *Segment Any Sign*, kept separate from the upstream
-`sign-language-processing/segmentation` code so it does not collide with ongoing
-development there.
+Project workspace for *Segment Any Sign*, kept separate from the upstream `sign-language-processing/segmentation` code so it does not collide with ongoing development there.
 
 ## How to Contribute
 
@@ -12,9 +10,7 @@ We can periodically sync from the upstream maintained by Amit/Rylo, and eventual
 
 ## Motivation
 
-A continuation of the segmentation model from
-[Moryossef & Jiang (2023)](https://aclanthology.org/2023.findings-emnlp.846/),
-which has seen several follow-ups:
+A continuation of the segmentation model from [Moryossef & Jiang (2023)](https://aclanthology.org/2023.findings-emnlp.846/), which has seen several follow-ups:
 
 - [Revisiting subtitle-unit segmentation](https://aclanthology.org/2025.acl-srw.93/) — BIO tagging and optical flow in a Seq2Seq formulation, on BOBSL and YouTube-ASL.
 - [Stronger hand-centric features](https://arxiv.org/abs/2504.08593) — HaMeR features and heavier Transformer backbones.
@@ -70,9 +66,7 @@ Datasets with *timed* gloss annotations, to be curated in [`datasets/`](datasets
 
 ## Method
 
-Start by benchmarking the 2023 model ([sign-language-processing/segmentation](https://github.com/sign-language-processing/segmentation)),
-where @AmitMY has already explored autoresearch to improve segmentation scores.
-Then implement iterative, targeted improvements against the new benchmarks — until we can confidently say: **our model can segment any sign!**
+Start by benchmarking the 2023 model ([sign-language-processing/segmentation](https://github.com/sign-language-processing/segmentation)), where @AmitMY has already explored autoresearch to improve segmentation scores. Then implement iterative, targeted improvements against the new benchmarks — until we can confidently say: **our model can segment any sign!**
 
 ## Setup
 
@@ -82,19 +76,16 @@ conda env create -f environment.yml
 conda activate sas
 ```
 
-`sas` is the environment for **the latest model** (2026) as well as for dataset
-curation and scoring.
+`sas` is the environment for **the latest model** (2026) as well as for dataset curation and scoring.
 
-Only the 2023 model needs an environment of its own, because its pose-format
-0.3.2 pin cannot coexist with the >=0.8.1 the 2026 model requires:
+Only the 2023 model needs an environment of its own, because its pose-format 0.3.2 pin cannot coexist with the >=0.8.1 the 2026 model requires:
 
 ```bash
 conda env create -f environment-2023.yml
 conda activate sas2023
 ```
 
-See [`benchmark/`](benchmark/) for how the two are used together, and
-[`experiments/`](experiments/) for training runs.
+See [`benchmark/`](benchmark/) for how the two are used together, and [`experiments/`](experiments/) for training runs.
 
 ## Write-up
 
@@ -107,6 +98,4 @@ git -C latex commit -am "..." && git -C latex push   # send edits back
 git add latex && git commit -m "latex: ..."  # record the new pointer here
 ```
 
-The last step matters: the parent repo pins a specific submodule commit, so a
-push to Overleaf is invisible here until that pointer is committed. Keep it a
-commit of its own rather than letting it ride along with code changes.
+The last step matters: the parent repo pins a specific submodule commit, so a push to Overleaf is invisible here until that pointer is committed. Keep it a commit of its own rather than letting it ride along with code changes.

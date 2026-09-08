@@ -7,9 +7,7 @@
 
 ## Why it is here
 
-Uses segmentation downstream: segment-informed tokens for translation, cutting
-input sequence length by up to 50% and memory use by 2.67x. Evidence that
-segmentation quality has consequences beyond the task itself.
+Uses segmentation downstream: segment-informed tokens for translation, cutting input sequence length by up to 50% and memory use by 2.67x. Evidence that segmentation quality has consequences beyond the task itself.
 
 ## Notes
 

@@ -7,35 +7,21 @@
 
 ## Why it is here
 
-The closest analogue to what we want, in text: one sentence segmentation model
-that is robust across languages and domains rather than trained per corpus —
-including on input without punctuation or casing, which is the text equivalent
-of the weak cues we work with.
+The closest analogue to what we want, in text: one sentence segmentation model that is robust across languages and domains rather than trained per corpus — including on input without punctuation or casing, which is the text equivalent of the weak cues we work with.
 
 ## Contributions
 
-Their claim is that no prior sentence segmenter achieves **all three** of
-robustness to missing punctuation, adaptability to new domains, and efficiency.
-One mechanism each:
+Their claim is that no prior sentence segmenter achieves **all three** of robustness to missing punctuation, adaptability to new domains, and efficiency. One mechanism each:
 
-- **Robustness** — a pretraining scheme that randomly removes punctuation-only
-  tokens and strips all casing and punctuation from 10% of samples per batch, so
-  the model cannot lean on the easiest surface cue.
-- **Adaptability** — LoRA fine-tuning per domain, treating "what counts as a
-  sentence boundary" as genuinely varying between domains rather than as
-  something to standardise away.
-- **Efficiency** — architectural changes giving a 3x speedup, plus a *limited
-  lookahead* attention mask capped at N/L tokens per layer, since stacking L
-  layers otherwise compounds the lookahead to N x L.
+- **Robustness** — a pretraining scheme that randomly removes punctuation-only tokens and strips all casing and punctuation from 10% of samples per batch, so the model cannot lean on the easiest surface cue.
+- **Adaptability** — LoRA fine-tuning per domain, treating "what counts as a sentence boundary" as genuinely varying between domains rather than as something to standardise away.
+- **Efficiency** — architectural changes giving a 3x speedup, plus a *limited lookahead* attention mask capped at N/L tokens per layer, since stacking L layers otherwise compounds the lookahead to N x L.
 
-Evaluated across 85 languages and 8 corpora, beating LLM baselines by the widest
-margin on poorly formatted text.
+Evaluated across 85 languages and 8 corpora, beating LLM baselines by the widest margin on poorly formatted text.
 
 ## Their training stages, mapped onto ours
 
-Their staged design is the part most worth borrowing. LoRA is their choice for
-the adaptation stage; ours only needs to be *some* finetuning, not necessarily
-parameter-efficient.
+Their staged design is the part most worth borrowing. LoRA is their choice for the adaptation stage; ours only needs to be *some* finetuning, not necessarily parameter-efficient.
 
 | | SaT (text) | Ours (sign) |
 |---|---|---|

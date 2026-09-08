@@ -1,7 +1,6 @@
 # Literature
 
-One folder per paper named in the [project README](../README.md), each with a
-short README for basic details and a place to record findings as we read.
+One folder per paper named in the [project README](../README.md), each with a short README for basic details and a place to record findings as we read.
 
 | paper | venue | relevance |
 |---|---|---|

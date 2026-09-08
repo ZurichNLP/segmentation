@@ -7,9 +7,7 @@
 
 ## Why it is here
 
-Our own work. Uses segmentation as a signal for aligning subtitles to signing —
-the SEA pipeline, which is where the report that the model works for BSL comes
-from.
+Our own work. Uses segmentation as a signal for aligning subtitles to signing — the SEA pipeline, which is where the report that the model works for BSL comes from.
 
 ## Notes
 
