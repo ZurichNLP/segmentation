@@ -6,7 +6,7 @@ the sign head all-`O` would teach it that nothing is ever a sign, which is worse
 than no pretraining at all. Instead every sign frame is `UNK`, which upstream's
 mask removes from the loss entirely.
 
-    from experiments import youtube_dataset   # registers "youtube"
+    from experiments import youtube_dataset   # registers "youtube_25"
 """
 
 from __future__ import annotations
@@ -27,10 +27,10 @@ from sign_language_segmentation.utils.bio import BIO  # noqa: E402
 from datasets.youtube_sl25 import load as yt  # noqa: E402
 
 
-class YouTubeSubtitleDataset(BaseSegmentationDataset):
+class YouTube25Dataset(BaseSegmentationDataset):
     """~38,850 videos of weak, subtitle-timed phrase boundaries."""
 
-    dataset_name = "youtube"
+    dataset_name = "youtube_25"
 
     def __init__(
         self,
@@ -41,6 +41,7 @@ class YouTubeSubtitleDataset(BaseSegmentationDataset):
         frame_dropout: float = 0.0,
         body_part_dropout: float = 0.0,
         dev_videos: int = yt.DEV_VIDEOS,
+        limit: int | None = None,
         **_ignored,
     ):
         self.split = split
@@ -54,6 +55,8 @@ class YouTubeSubtitleDataset(BaseSegmentationDataset):
         self.items = []
         name = "dev" if split in (Split.DEV, "dev", "validation") else "train"
         for spec in yt.clip_specs(name, dev_videos=dev_videos):
+            if limit is not None and len(self.items) >= limit:
+                break
             self.items.append({
                 "id": spec["id"],
                 "pose_path": spec["pose_path"],
@@ -68,8 +71,9 @@ class YouTubeSubtitleDataset(BaseSegmentationDataset):
 
         hours = sum(i["total_frames"] / i["fps"] for i in self.items) / 3600
         cues = sum(len(i["sentences"]) for i in self.items)
-        print(f"YouTubeSubtitleDataset({split}): {len(self.items):,} videos, "
-              f"{hours:,.0f} h, {cues:,} cues")
+        limited = f", limited to {limit}" if limit is not None else ""
+        print(f"YouTube25Dataset({split}): {len(self.items):,} videos, "
+              f"{hours:,.0f} h, {cues:,} cues{limited}")
 
     def __getitem__(self, index: int) -> dict:
         item = self.items[index]
@@ -101,7 +105,8 @@ class YouTubeSubtitleDataset(BaseSegmentationDataset):
     def from_args(cls, split: Split, args: Namespace, **augment_kwargs):
         return cls(split=split,
                    dev_videos=getattr(args, "dev_videos", yt.DEV_VIDEOS),
+                   limit=getattr(args, "limit", None),
                    **augment_kwargs)
 
 
-register_dataset(YouTubeSubtitleDataset.dataset_name, YouTubeSubtitleDataset)
+register_dataset(YouTube25Dataset.dataset_name, YouTube25Dataset)

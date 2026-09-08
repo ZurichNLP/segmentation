@@ -6,14 +6,14 @@ come from — what we have is the download archive, keyed `<doc>_<person>.pose`.
 
 Rather than rebuild the tree, this registers an adapter over
 [`../datasets/public_dgs_corpus/load.py`](../datasets/public_dgs_corpus/load.py)
-under the name **`dgs_shared`**, so `--datasets dgs_shared` trains on exactly the
+under the name **`dgs_corpus`**, so `--datasets dgs_corpus` trains on exactly the
 clips, filters and gold the benchmark scores. That is the point: a training run
 and a benchmark row must not be able to disagree about what the data is.
 
 Everything downstream — windowing, augmentation, BIO construction, collation — is
 upstream's `load_and_augment`, untouched. This class only supplies `self.items`.
 
-    from experiments import dgs_dataset  # registers "dgs_shared"
+    from experiments import dgs_dataset  # registers "dgs_corpus"
 """
 
 from __future__ import annotations
@@ -30,10 +30,10 @@ from sign_language_segmentation.datasets.common import (  # noqa: E402
 from datasets.public_dgs_corpus import load as dgs_data  # noqa: E402
 
 
-class SharedDGSDataset(BaseSegmentationDataset):
+class DGSCorpusDataset(BaseSegmentationDataset):
     """Public DGS Corpus, read through the benchmark's own loader."""
 
-    dataset_name = "dgs_shared"
+    dataset_name = "dgs_corpus"
 
     def __init__(
         self,
@@ -87,7 +87,7 @@ class SharedDGSDataset(BaseSegmentationDataset):
             })
 
         limited = f", limited to {limit}" if limit is not None else ""
-        print(f"SharedDGSDataset({split}): {len(self.items)} videos, "
+        print(f"DGSCorpusDataset({split}): {len(self.items)} videos, "
               f"phrase={phrase}{limited}")
 
     def get_split_manifest(self) -> dict:
@@ -99,7 +99,7 @@ class SharedDGSDataset(BaseSegmentationDataset):
         }
 
     @classmethod
-    def from_args(cls, split: Split, args: Namespace, **augment_kwargs) -> SharedDGSDataset:
+    def from_args(cls, split: Split, args: Namespace, **augment_kwargs) -> DGSCorpusDataset:
         return cls(split=split, phrase=getattr(args, "phrase", "glosses"),
                    limit=getattr(args, "limit", None),
                    backup=getattr(args, "backup", dgs_data.BACKUP),
@@ -111,4 +111,4 @@ def _to_ms(spans) -> list[dict[str, float]]:
     return [{"start": s["start_time"] * 1000, "end": s["end_time"] * 1000} for s in spans]
 
 
-register_dataset(SharedDGSDataset.dataset_name, SharedDGSDataset)
+register_dataset(DGSCorpusDataset.dataset_name, DGSCorpusDataset)

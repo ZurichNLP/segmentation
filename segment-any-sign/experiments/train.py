@@ -1,7 +1,7 @@
 """Launch a 2026-style training run on the benchmark's own DGS clips.
 
 Thin wrapper. The training loop, model, augmentation and checkpointing are
-upstream's — this only swaps the dataset for `dgs_shared`
+upstream's — this only swaps the dataset for `dgs_corpus`
 ([`dgs_dataset.py`](dgs_dataset.py)) so a run trains on exactly the clips,
 filters and gold that [`../benchmark/`](../benchmark/) scores, and then calls
 `sign_language_segmentation.train.train()` unchanged.
@@ -105,11 +105,13 @@ def main() -> None:
                       help="comma-separated datasets to validate on. The FIRST is "
                            "in-domain and supplies the selection metric; the rest "
                            "are logged for information. Defaults to --datasets")
-    ours.add_argument("--max-steps", type=int, default=5000,
+    ours.add_argument("--max-steps", type=int, default=None,
                       help="total optimiser steps, the unit that compares across "
                            "datasets — DGS gives 10 steps/epoch, YouTube ~600, so "
                            "'epochs' means nothing between them. --epochs is "
-                           "derived from this so OneCycle spans exactly the run")
+                           "derived from this so OneCycle spans exactly the run. "
+                           "Default 10,000 when pretraining on youtube_25, else "
+                           "5,000 (which is DGS's 500 epochs)")
     ours.add_argument("--early-stop", choices=["on", "off"], default="off",
                       help="stop when the selection metric plateaus. Off by "
                            "default: OneCycle anneals over --epochs, so stopping "
@@ -130,8 +132,9 @@ def main() -> None:
     mine, rest = ours.parse_known_args()
     sys.argv = [sys.argv[0]] + rest
 
-    # registers "dgs_shared" before anything asks the registry for it
+    # register every dataset before anything asks the registry for one
     from experiments import dgs_dataset  # noqa: F401
+    from experiments import youtube_dataset  # noqa: F401
 
     from datasets.public_dgs_corpus import load as dgs_data
     from sign_language_segmentation.args import args
@@ -145,7 +148,7 @@ def main() -> None:
     args.limit = mine.limit
     if args.datasets == "all":
         # "all" would resolve to whatever happens to be registered; be explicit
-        args.datasets = dgs_dataset.SharedDGSDataset.dataset_name
+        args.datasets = dgs_dataset.DGSCorpusDataset.dataset_name
     args.corpus = args.poses = dgs_data.BACKUP
     args.data_loader = "datasets/public_dgs_corpus/load.py (archive, native fps)"
 
@@ -190,8 +193,12 @@ def main() -> None:
     upstream_train.get_dataloader = get_dataloader_multi
 
     # only the phrase head has subtitle supervision
-    if "youtube" in args.datasets.split(","):
+    pretraining = "youtube_25" in args.datasets.split(",")
+    if pretraining:
         ValidationMetricsModel.levels = ("sentence",)
+    if mine.max_steps is None:
+        # YouTube is ~40x the data, so it gets a longer budget by default
+        mine.max_steps = 10000 if pretraining else 5000
 
     # Defaults describe the *basic baseline*: every optional trick off, so each
     # later experiment turns exactly one back on. This deliberately departs from
@@ -274,7 +281,10 @@ def main() -> None:
             f"{run_dir} already holds checkpoints. Give --run_name a new "
             f"experiment id (<NN>_<slug>) rather than reusing this one.")
     # the data report describes the full corpus, so it is meaningless under --limit
-    if not mine.skip_stats and mine.limit is None:
+    # data_stats reads the DGS loader directly, so it only describes a DGS run;
+    # for any other dataset it would print numbers from a corpus not being used
+    if (not mine.skip_stats and mine.limit is None
+            and "dgs_corpus" in args.datasets.split(",")):
         report = write_data_report(run_dir, phrase=mine.phrase)
         # flat scalars ride along into W&B via upstream's log_hyperparams
         for split, s in report["splits"].items():
@@ -334,10 +344,10 @@ def inverse_class_weights(args, samples: int = 50, seed: int = 0) -> dict:
 
     from sign_language_segmentation.datasets.common import Split
 
-    from experiments.dgs_dataset import SharedDGSDataset
+    from experiments.dgs_dataset import DGSCorpusDataset
     from sign_language_segmentation.utils.bio import BIO
 
-    dataset = SharedDGSDataset(split=Split.TRAIN, num_frames=args.num_frames,
+    dataset = DGSCorpusDataset(split=Split.TRAIN, num_frames=args.num_frames,
                                velocity=args.velocity, phrase=args.phrase)
     picks = np.random.default_rng(seed).choice(
         len(dataset), min(samples, len(dataset)), replace=False)
