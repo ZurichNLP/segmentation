@@ -32,9 +32,12 @@ CACHE_DIR = Path("/scratch/zifjia/segment-any-sign/cache")
 META_CACHE = CACHE_DIR / "youtube_sl25_pose_meta.json"
 CUE_CACHE = CACHE_DIR / "youtube_sl25_cues.json"
 
-#: videos held out for in-domain validation. Kept small on purpose: validation
-#: runs whole videos, and the median one is 3.8 minutes.
-DEV_VIDEOS = 100
+#: videos held out for in-domain validation, per sign language. All 56 languages
+#: in the corpus have at least 12 videos, so 3 each gives a balanced 168-video
+#: dev set — enough to cover every language, small enough that validating on
+#: whole videos (median 3.8 min) stays affordable.
+DEV_PER_LANGUAGE = 3
+METADATA = f"{ROOT}/youtube-sl-25_youtube-sl-25-metadata.csv"
 
 _TIMESTAMP = re.compile(
     r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[.,](\d{3})")
@@ -162,16 +165,49 @@ def _cues(index: dict, rebuild: bool = False) -> dict:
     return cache
 
 
-def split_of(video_id: str, dev_videos: int = DEV_VIDEOS,
-             total: int = 38850) -> str:
-    """Deterministic hash split, so dev membership never depends on file order."""
+def languages() -> dict[str, str]:
+    """Video id -> sign-language code, from the corpus metadata.
+
+    Note the file has CRLF line endings; values must be stripped or every
+    comparison silently fails. 197 videos are labelled `???` and are kept — an
+    unknown language is not a reason to drop otherwise good data.
+    """
+    import csv
+
+    mapping = {}
+    with open(METADATA, newline="") as handle:
+        for row in csv.reader(handle):
+            if len(row) >= 2:
+                mapping[row[0].strip()] = row[1].strip()
+    return mapping
+
+
+def dev_ids(index: dict, per_language: int = DEV_PER_LANGUAGE) -> set[str]:
+    """A language-balanced dev set: the same number of videos from each language.
+
+    A hash split would follow the corpus distribution, which is 42% ASL — so
+    in-domain validation would mostly measure ASL. Taking a fixed number per
+    language instead means the selection metric reflects all 56 languages.
+    Selection within a language is by hash, so membership never depends on file
+    order, and `???` is treated as its own group rather than discarded.
+    """
     import hashlib
+    from collections import defaultdict
 
-    bucket = int(hashlib.sha256(f"ytsl25_{video_id}".encode()).hexdigest(), 16) % total
-    return "dev" if bucket < dev_videos else "train"
+    by_language: dict[str, list[str]] = defaultdict(list)
+    lang = languages()
+    for vid in index:
+        by_language[lang.get(vid, "???")].append(vid)
+
+    chosen = set()
+    for code, vids in sorted(by_language.items()):
+        ordered = sorted(vids, key=lambda v: hashlib.sha256(
+            f"ytsl25_{v}".encode()).hexdigest())
+        chosen.update(ordered[:per_language])
+    return chosen
 
 
-def clip_specs(split: str = "train", dev_videos: int = DEV_VIDEOS,
+def clip_specs(split: str = "train", per_language: int = DEV_PER_LANGUAGE,
                rebuild_cache: bool = False):
     """Yield clip metadata: `id`, `pose_path`, `fps`, `total_frames`, `sentences`.
 
@@ -181,12 +217,13 @@ def clip_specs(split: str = "train", dev_videos: int = DEV_VIDEOS,
     index = video_index()
     meta = _pose_meta(index, rebuild=rebuild_cache)
     all_cues = _cues(index, rebuild=rebuild_cache)
+    held_out = dev_ids(index, per_language)
 
     for vid, paths in index.items():
         info = meta.get(vid)
         if info is None:                          # unreadable pose
             continue
-        if split != "all" and split_of(vid, dev_videos, len(index)) != split:
+        if split != "all" and (vid in held_out) != (split == "dev"):
             continue
         cues = [{"start_time": a / 1000, "end_time": b / 1000, "glosses": []}
                 for a, b in all_cues.get(vid, [])]
