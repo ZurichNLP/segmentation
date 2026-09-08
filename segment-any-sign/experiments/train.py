@@ -101,6 +101,16 @@ def main() -> None:
                       help="append fps-normalised velocity features (3->6 dims). "
                            "Upstream declares --velocity as store_true with "
                            "default True, so it cannot be disabled there at all")
+    ours.add_argument("--sampling", choices=["frame", "video"], default="frame",
+                      help="frame (default): a video is drawn in proportion to "
+                           "its length, so every frame is equally likely. video: "
+                           "upstream's behaviour, one window per video per epoch "
+                           "regardless of length, which oversamples short videos "
+                           "by orders of magnitude per frame")
+    ours.add_argument("--val-every", type=int, default=100,
+                      help="validate every N optimiser steps rather than every "
+                           "epoch. An epoch is 603 steps on YouTube and 10 on "
+                           "DGS, so epochs are useless as a validation unit")
     ours.add_argument("--val-datasets", default=None,
                       help="comma-separated datasets to validate on. The FIRST is "
                            "in-domain and supplies the selection metric; the rest "
@@ -186,11 +196,33 @@ def main() -> None:
     _get_dataloader = upstream_train.get_dataloader
 
     def get_dataloader_multi(split, dataset_names, args, **kwargs):
-        if str(split) != "dev":
-            return _get_dataloader(split, dataset_names, args, **kwargs)
-        return [_get_dataloader(split, name, args, **kwargs) for name in val_names]
+        if str(split) == "dev":
+            return [_get_dataloader(split, name, args, **kwargs) for name in val_names]
+        loader = _get_dataloader(split, dataset_names, args, **kwargs)
+        if str(split) == "train" and mine.sampling == "frame":
+            return frame_uniform_loader(loader)
+        return loader
 
     upstream_train.get_dataloader = get_dataloader_multi
+
+    # Validate on a step schedule, not an epoch one. `check_val_every_n_epoch=None`
+    # is what lets `val_check_interval` count steps *across* epoch boundaries —
+    # without it Lightning requires the interval to fit inside one epoch, which
+    # 100 steps does not on DGS (10 steps per epoch). Wrapped in a shim rather
+    # than mutating the pytorch_lightning module itself.
+    class _TrainerShim:
+        def __init__(self, module, extra):
+            self._module, self._extra = module, extra
+
+        def __getattr__(self, name):
+            return getattr(self._module, name)
+
+        def Trainer(self, *args, **kwargs):
+            return self._module.Trainer(*args, **{**kwargs, **self._extra})
+
+    upstream_train.pl = _TrainerShim(
+        upstream_train.pl,
+        {"val_check_interval": mine.val_every, "check_val_every_n_epoch": None})
 
     # only the phrase head has subtitle supervision
     pretraining = "youtube_25" in args.datasets.split(",")
@@ -317,6 +349,36 @@ def main() -> None:
         evaluate_best_checkpoint(run_dir, phrase=mine.phrase, split=mine.eval_split)
 
 
+def frame_uniform_loader(loader):
+    """Redraw the training loader so each *frame* is equally likely to be seen.
+
+    Upstream shuffles the clip list, so one 1024-frame window is drawn per video
+    per epoch whatever its length — a 90-minute video and a 30-second one
+    contribute equally, which oversamples short videos enormously per frame.
+    Weighting each video by its frame count fixes that. Sampling is with
+    replacement, and the number of draws per epoch is unchanged, so steps per
+    epoch and the schedule derived from them stay the same.
+    """
+    from torch.utils.data import ConcatDataset, DataLoader, WeightedRandomSampler
+
+    def lengths(dataset):
+        if isinstance(dataset, ConcatDataset):
+            return [n for part in dataset.datasets for n in lengths(part)]
+        return [float(item["total_frames"]) for item in dataset.items]
+
+    weights = lengths(loader.dataset)
+    sampler = WeightedRandomSampler(weights, num_samples=len(weights),
+                                    replacement=True)
+    print(f"  frame-uniform sampling over {len(weights):,} videos "
+          f"({min(weights):,.0f}-{max(weights):,.0f} frames each)")
+    return DataLoader(loader.dataset, batch_size=loader.batch_size,
+                      sampler=sampler, collate_fn=loader.collate_fn,
+                      num_workers=loader.num_workers,
+                      persistent_workers=loader.persistent_workers,
+                      prefetch_factor=loader.prefetch_factor,
+                      pin_memory=loader.pin_memory)
+
+
 def dataset_size(args) -> int:
     """Number of training clips, for turning a step budget into epochs."""
     from sign_language_segmentation.datasets.common import Split, build_datasets
@@ -388,6 +450,8 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"body_part_dropout {args.body_part_dropout:g}  "
           f"attn_dropout {args.attn_dropout:g}  velocity {args.velocity}"
           f"\n  tricks ON   fps_aug {args.fps_aug}  num_frames {args.num_frames}"
+          f"\n  sampling    {mine.sampling}-uniform"
+          f"\n  validate    every {mine.val_every} steps"
           f"\n  schedule    ~{mine.max_steps:,} steps = {args.epochs} epochs, early stop "
           f"{'off (OneCycle runs to completion)' if mine.early_stop == 'off' else f'patience {args.patience}'}"
           f"\n  loss        {'NLL' if args.class_weighting == 'none' else 'NLL + inverse class weights (2023)'}"
