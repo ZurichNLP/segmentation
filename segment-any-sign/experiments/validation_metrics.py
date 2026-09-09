@@ -12,7 +12,8 @@ same way `benchmark/score.py` computes them, and logs them beside upstream's —
 `validation_sign_iou`, and so on) so W&B can overlay the two curves in one panel.
 
 `validation_hm_iou` is still logged unchanged, but **selection is on
-`validation_mean_mf1s`** — the mean of sign and phrase mF1S. mF1S counts matched
+`validation_mean_mf1s`** — the mean of sign and phrase mF1S, over the supervised
+levels only, so a phrase-only run (YouTube) reports phrase mF1S. mF1S counts matched
 segments, so unlike IoU it penalises the merging the 2026 model shows; selecting
 on it picks checkpoints that segment rather than merely cover. Two consequences
 worth stating: our checkpoints are no longer selected the way the published 2026
@@ -218,9 +219,15 @@ class ValidationMetricsModel(PoseTaggingModel):
         # EarlyStopping raises. At train time it is logged only when a batch was
         # actually sampled: with few steps per epoch, `metrics_every_n_steps` can
         # skip whole epochs, and logging 0.0 for those would draw a sawtooth.
+        # Averaged over the *supervised* levels only. During subtitle pretraining
+        # the sign head is masked, so counting an absent sign mF1S as 0.0 would
+        # halve every logged value — monotonic, so selection still worked, but the
+        # number itself was meaningless.
+        supervised = [our for our, upstream in (("sign", "sign"), ("phrase", "sentence"))
+                      if upstream in self.levels]
         if prefix == "validation" or collected["sign"]["frame_f1"]:
             self.log(f"{prefix}_mean_mf1s",
-                     (mf1s.get("sign", 0.0) + mf1s.get("phrase", 0.0)) / 2,
+                     sum(mf1s.get(our, 0.0) for our in supervised) / len(supervised),
                      prog_bar=(prefix == "validation"))
 
     _train_collected = None
