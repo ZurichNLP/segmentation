@@ -52,6 +52,87 @@ def segments_to_bio(segments: Sequence[Segment], num_frames: int) -> np.ndarray:
     return labels
 
 
+def bio_to_segments(labels: Sequence[int], b: int = 1, i: int = 2) -> list[Segment]:
+    """Frame labels to segments, following Moryossef & Jiang (2023) Algorithm 1.
+
+    This is the argmax case of their greedy decoder (`threshold_likeliest`, where
+    `b > max(i, o)` is just "the argmax is B"), with `restart_on_b` as their
+    released `probs_to_segments` implements it:
+
+      * a segment opens on the first B;
+      * a **run** of B frames is one boundary, not one per frame — their
+        `did_pass_start` flag suppresses restarts until a non-B frame is seen;
+      * once past that, a B closes the open segment at `i - 1` and opens a new
+        one **at that same frame**, so two back-to-back segments are both
+        recovered;
+      * anything that is neither B nor I — O, and 2026's UNK — closes the
+        segment and opens nothing.
+
+    Two deviations, both deliberate. The paper's Algorithm 1 sets `start ← None`
+    when a B closes a segment, which consumes that B and loses the following
+    segment; their released code restarts at `i`, and that is what produced the
+    published numbers, so it is what we follow. And their tail case yields
+    `len(probs)`, one past the last frame; ours ends at `len - 1`, since our
+    segment bounds are inclusive.
+
+    This decodes **predictions** only. Gold keeps `bio_labels_to_segments`,
+    which splits at every B and has no `did_pass_start`: in gold, adjacent B
+    frames mean adjacent one-frame segments and that is real, whereas in a noisy
+    argmax a run of B is one boundary. Decoding gold both ways gives identical
+    spans at phrase level on every split, and 90.4% identical at sign level,
+    where one-frame segments are common — the counts still match to within 3 of
+    8,004, but this decoder makes a `B O` pair one frame longer. That asymmetry
+    is deliberate and is 2023's: their gold came from spans directly and was
+    never decoded.
+
+    What it replaces is upstream's `likeliest_probs_to_segments`, which ignores B
+    entirely and merges any contiguous run of non-O. Paired with a gold decoder
+    that does split on B, that caps `%` far below 1 however good the model is.
+    Feeding gold labels through each decoder gives the attainable `%`:
+
+    ==================  ========  =====
+    dev set             upstream   ours
+    ==================  ========  =====
+    YouTube phrase         0.578  1.000
+    DGS dev phrase         0.164  1.000
+    DGS test phrase        0.246  1.000
+    DGS test sign          0.962  1.000
+    ==================  ========  =====
+
+    Verified against the released v2023 `probs_to_segments` (with
+    `threshold_likeliest`) on 20,000 random label sequences: zero mismatches.
+    """
+    segments: list[Segment] = []
+    start = None
+    passed_start = False
+
+    for frame, label in enumerate(labels):
+        label = int(label)
+        if start is None:
+            if label == b:
+                start = frame
+                passed_start = False
+        elif not passed_start:
+            # The frame right after the opening B never closes anything, not even
+            # an O — it only marks that the opening run is over. That is what
+            # `did_pass_start` does in their code, and it is why a lone B followed
+            # by O still yields a segment rather than nothing.
+            if label != b:
+                passed_start = True
+        elif label == b:
+            segments.append({"start": start, "end": frame - 1})
+            start = frame                            # restart on this very frame
+            passed_start = False
+        elif label != i:                             # O or UNK
+            segments.append({"start": start, "end": frame - 1})
+            start = None
+            passed_start = False
+
+    if start is not None:
+        segments.append({"start": start, "end": len(labels) - 1})
+    return segments
+
+
 def frame_f1(pred_bio: np.ndarray, gold_bio: np.ndarray,
              labels: Iterable[int] | None = BIO_LABELS) -> float:
     """Macro-averaged per-class F1 over frame-level BIO labels.

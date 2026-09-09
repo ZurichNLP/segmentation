@@ -42,13 +42,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch  # noqa: E402
 
-from sign_language_segmentation.metrics import (  # noqa: E402
-    bio_labels_to_segments, likeliest_probs_to_segments)
+from sign_language_segmentation.metrics import bio_labels_to_segments  # noqa: E402
 from sign_language_segmentation.model.model import PoseTaggingModel  # noqa: E402
 from sign_language_segmentation.utils.bio import BIO  # noqa: E402
 
-from metrics import (frame_f1, frame_f1_micro, global_iou,  # noqa: E402
-                     mf1s_from_counts, segment_counts, segment_percentage)
+from metrics import (bio_to_segments, frame_f1, frame_f1_micro,  # noqa: E402
+                     global_iou, mf1s_from_counts, segment_counts,
+                     segment_percentage)
 
 # upstream UNK=0, O=1, B=2, I=3  ->  ours O=0, B=1, I=2
 TO_OURS = {1: 0, 2: 1, 3: 2}
@@ -92,12 +92,26 @@ class ValidationMetricsModel(PoseTaggingModel):
     #: gold wastes a decode per clip.
     levels = ("sign", "sentence")
 
+    #: gradient accumulation, so the LR schedule can be sized in *optimiser*
+    #: steps. Upstream is handed batches per epoch and OneCycleLR steps once per
+    #: optimiser step, so with accumulation the schedule would be N times too
+    #: long and never finish its decay.
+    accumulate = 1
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.accumulate > 1:
+            import math
+            self.steps_per_epoch = max(1, math.ceil(self.steps_per_epoch
+                                                    / self.accumulate))
         if self.class_weights:
             import torch.nn as nn
             for level, attr in (("sign", "sign_loss_fn"),
                                 ("sentence", "phrase_loss_fn")):
+                # only supervised levels are measured, so a one-head run has no
+                # entry for the other and must leave its loss function alone
+                if level not in self.class_weights:
+                    continue
                 weight = torch.tensor(self.class_weights[level], dtype=torch.float)
                 # NLLLoss is a Module, so Lightning moves the weight with the model
                 setattr(self, attr, nn.NLLLoss(reduction="none", weight=weight))
@@ -142,7 +156,12 @@ class ValidationMetricsModel(PoseTaggingModel):
                     # bf16, which numpy cannot convert (upstream's own
                     # likeliest_probs_to_segments trips on this too)
                     probs = log_probs[upstream_name][i][:num_frames].cpu().float()
-                    pred_segments = likeliest_probs_to_segments(probs)
+                    # not upstream's likeliest_probs_to_segments: that one never
+                    # looks at B, so back-to-back segments can only ever be
+                    # counted as one. bio_to_segments is the 2023 paper's
+                    # Algorithm 1 at argmax, and restores a reachable % of 1.
+                    pred_segments = bio_to_segments(
+                        probs.argmax(dim=1).numpy(), b=BIO["B"], i=BIO["I"])
                     gold_bio = _remap(gold[:num_frames].cpu()).numpy()
                     pred_bio = _remap(probs.argmax(dim=1)).numpy()
 
@@ -187,9 +206,22 @@ class ValidationMetricsModel(PoseTaggingModel):
                      batch_size=batch_size, prog_bar=True)
 
         self.log(f"{name}_loss", total_loss, batch_size=batch_size)
-        # the Dice term is defined on the sign head only, so it goes with it
+
+        # The Dice term is defined on the sign head only. It is inlined rather
+        # than delegated to `super().step()`, which would recompute the forward
+        # *and* add the NLL of every head including the unsupervised one — with
+        # --levels sign that silently trained the phrase head as well.
         if self.hparams.dice_loss_weight > 0.0 and "sign" in self.levels:
-            return super().step(batch, name)
+            sign_gold = batch["bio"]["sign"]
+            mask = (sign_gold != BIO["UNK"]).float()
+            sign_probs = log_probs["sign"].exp()
+            pred_sign = (sign_probs[:, :, BIO["B"]] + sign_probs[:, :, BIO["I"]]) * mask
+            gold_sign = (sign_gold >= BIO["B"]).float() * mask
+            dice_num = 2.0 * (pred_sign * gold_sign).sum()
+            dice_den = pred_sign.sum() + gold_sign.sum() + 1e-6
+            dice_loss = (1.0 - dice_num / dice_den) * self.hparams.dice_loss_weight
+            total_loss = total_loss + dice_loss
+            self.log(f"{name}_dice_loss", dice_loss, batch_size=batch_size)
         return total_loss
 
     def _log_collected(self, collected: dict, prefix: str) -> None:
@@ -225,7 +257,12 @@ class ValidationMetricsModel(PoseTaggingModel):
         # number itself was meaningless.
         supervised = [our for our, upstream in (("sign", "sign"), ("phrase", "sentence"))
                       if upstream in self.levels]
-        if prefix == "validation" or collected["sign"]["frame_f1"]:
+        # At train time, log only when a batch was actually scored. Testing the
+        # sign bucket specifically would never fire in a phrase-only run, which
+        # silently dropped `train_mean_mf1s` from exactly the runs that have one
+        # head.
+        if prefix == "validation" or any(collected[our]["frame_f1"]
+                                         for our in supervised):
             self.log(f"{prefix}_mean_mf1s",
                      sum(mf1s.get(our, 0.0) for our in supervised) / len(supervised),
                      prog_bar=(prefix == "validation"))

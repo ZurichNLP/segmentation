@@ -18,9 +18,16 @@ annotations the 2023 run uses. Everything below that is the 2026 model's own:
     `create_bio_from_times` (searchsorted over frame timestamps) over `create_bio`
     (floor/ceil on a fixed fps). The flag does no augmenting outside training, but
     it does select the label builder, so it is honoured here.
-  * **Decoding** is `likeliest_probs_to_segments` — plain argmax. The 2026 README
-    is explicit that threshold decoding was tried and rejected, so unlike the 2023
-    row this one has no `b/o` to report.
+  * **Decoding** is argmax, as the 2026 README requires — it is explicit that
+    threshold decoding was tried and rejected, so unlike the 2023 row this one
+    has no `b/o` to report. How the argmax labels become segments is
+    `--decode`. The default `2023` uses `metrics.bio_to_segments`, the 2023
+    paper's Algorithm 1: a B closes the open segment and opens the next.
+    `--decode upstream` instead calls `likeliest_probs_to_segments`, which is
+    what this model ships with — it never inspects B and merges any run of
+    non-O, so two touching segments can only be counted as one while the gold
+    decoder splits them, capping phrase `%` at 0.25 on DGS test however good the
+    model is. Use it only to reproduce the shipped model on its own terms.
   * **Chunking** is upstream's by default: the whole clip goes to
     `PoseTaggingModel`, whose CNN runs full length and whose transformer then
     cuts it into *non-overlapping* `num_frames` chunks. Attention cannot cross a
@@ -72,10 +79,12 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from datasets.public_dgs_corpus import load as dgs_data  # noqa: E402
+from metrics import bio_to_segments  # noqa: E402
 
 # upstream 2026 ids -> ours. UNK has no counterpart; it only appears as batch
 # padding, which cannot happen at batch size 1.
 BIO_2026_TO_OURS = {1: 0, 2: 1, 3: 2}
+BIO_2026 = {"UNK": 0, "O": 1, "B": 2, "I": 3}
 
 LEVELS = {"sign": "sign", "sentence": "phrase"}  # their name -> ours
 
@@ -207,6 +216,12 @@ def main() -> None:
                         help="model name for the results table; set it when "
                              "scoring a retrained checkpoint so the row is not "
                              "confused with the shipped one")
+    parser.add_argument("--decode", default=None, choices=["2023", "upstream"],
+                        help="'2023' honours B (the paper's Algorithm 1 at "
+                             "argmax); 'upstream' is the shipped "
+                             "likeliest_probs_to_segments, which ignores it. "
+                             "Defaults to 'upstream' for the shipped 2026 "
+                             "checkpoint and '2023' for one of ours")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
@@ -217,6 +232,12 @@ def main() -> None:
     from sign_language_segmentation.utils.bio import create_bio_from_times
 
     model_path = args.model or resolve_model_path()
+    # The shipped model is always benchmarked on its own terms, decoder
+    # included: that is the model as published. Our own checkpoints are decoded
+    # the 2023 way, since a decoder that ignores B cannot separate two touching
+    # segments and caps phrase % at 0.25 on this split.
+    if args.decode is None:
+        args.decode = "upstream" if args.model is None else "2023"
     model = _load_model_uncached(model_dir=model_path, device=args.device)
     num_frames = getattr(model.hparams, "num_frames", None)
     # (joints, dims); dims is 6 with velocity appended, 3 without
@@ -230,7 +251,9 @@ def main() -> None:
     native = args.source == "native"
     print(f"model        {model_path}")
     print(f"chunk size   {num_frames} frames")
-    print(f"decoding     likeliest (argmax)")
+    print(f"decoding     argmax, segments via "
+          + ("likeliest_probs_to_segments, B ignored (shipped behaviour)"
+             if args.decode == "upstream" else "bio_to_segments, B honoured"))
     print(f"source       {args.source} "
           f"({'50fps originals' if native else f'{args.fps}fps TFDS build'})")
     print(f"phrase gold  {args.phrase}")
@@ -270,7 +293,10 @@ def main() -> None:
             probs = log_probs[their_name][0].cpu()
 
             record["gold"][our_name] = bio_labels_to_segments(torch.from_numpy(gold_bio.astype(np.int64)))
-            record["pred"][our_name] = likeliest_probs_to_segments(probs)
+            record["pred"][our_name] = (
+                likeliest_probs_to_segments(probs) if args.decode == "upstream"
+                else bio_to_segments(probs.numpy().argmax(axis=1),
+                                     b=BIO_2026["B"], i=BIO_2026["I"]))
             record["gold_bio"][our_name] = rle([BIO_2026_TO_OURS.get(int(v), 0) for v in gold_bio])
             record["pred_bio"][our_name] = rle(
                 [BIO_2026_TO_OURS.get(int(v), 0) for v in probs.numpy().argmax(axis=1)])
@@ -288,6 +314,7 @@ def main() -> None:
         "thresholds": {},
         "source": args.source,
         "overlap": args.overlap,
+        "decode": args.decode,
         "velocity": velocity,
         "pose_dims": list(pose_dims),
         "phrase_gold": args.phrase,

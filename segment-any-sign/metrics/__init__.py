@@ -3,6 +3,7 @@
 from metrics.segmentation import (
     MF1S_THRESHOLDS,
     aggregate,
+    bio_to_segments,
     evaluate_level,
     frame_f1,
     frame_f1_micro,
@@ -19,6 +20,7 @@ from metrics.segmentation import (
 __all__ = [
     "MF1S_THRESHOLDS",
     "aggregate",
+    "bio_to_segments",
     "evaluate_level",
     "frame_f1",
     "frame_f1_micro",

@@ -73,12 +73,22 @@ a real run short; pass it explicitly.
 from __future__ import annotations
 
 import argparse
+import builtins
+import functools
 import json
 import math
+import os
 import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
+
+#: Everything a run writes lives on scratch, never in the repo or on /home:
+#: checkpoints are ~68 MB each and the pose caches are large. `dist/` and
+#: `wandb/` in the repo are symlinks to the same root, so relative paths still
+#: work; this is the one path that has to name it outright.
+SCRATCH = Path("/scratch/zifjia/segment-any-sign")
+CACHE_DIR = SCRATCH / "cache"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -130,15 +140,37 @@ def main() -> None:
     ours.add_argument("--fps-aug", choices=["on", "off"], default="off",
                       help="random 25-50 fps resampling per training clip")
     ours.add_argument("--class-weights", default="auto",
-                      choices=["auto", "inverse", "none"],
+                      choices=["auto", "inverse", "inverse-b", "none"],
                       help="loss class weighting. auto (default) = 2023's inverse "
                            "class frequency when dice is off, unweighted when it "
                            "is on, so the loss is always one model's or the "
-                           "other's and never a hybrid")
+                           "other's and never a hybrid. 'inverse-b' weights only "
+                           "B, the boundary class, by inverse frequency and "
+                           "leaves O and I flat — for a corpus too imbalanced "
+                           "for inverse weighting to be safe on those two")
     ours.add_argument("--select-on", default="mean_mf1s",
                       choices=["mean_mf1s", "hm_iou"],
                       help="checkpoint selection metric (default mean_mf1s: the "
-                           "mean of sign and phrase mF1S; hm_iou is upstream's)")
+                           "mean of mF1S over the supervised levels; hm_iou is "
+                           "upstream's, and needs both heads)")
+    ours.add_argument("--num-workers", type=int, default=None,
+                      help="dataloader workers (upstream hardcodes 8). Default "
+                           "is min(32, CPUs allocated to this job): reading is "
+                           "the bottleneck, not compute")
+    ours.add_argument("--accumulate", type=int, default=1,
+                      help="gradient accumulation steps. Multiplies the effective "
+                           "batch without touching activation memory, which is "
+                           "what caps batch_size: peak was 53 GB of 85 GB at "
+                           "batch 64, so 128 would not fit. Note a step becomes "
+                           "N optimiser-free forwards, so --max-steps counts "
+                           "optimiser steps and the run gets N times longer")
+    ours.add_argument("--levels", default="auto",
+                      choices=["auto", "both", "sign", "phrase"],
+                      help="which heads carry supervision. auto = phrase only "
+                           "when training on youtube_25 (subtitles are phrases "
+                           "and there is no gloss signal), both otherwise. A "
+                           "level left out gets no loss, no metrics and no "
+                           "weight in the selection metric")
     mine, rest = ours.parse_known_args()
     sys.argv = [sys.argv[0]] + rest
 
@@ -197,12 +229,28 @@ def main() -> None:
 
     def get_dataloader_multi(split, dataset_names, args, **kwargs):
         if str(split) == "dev":
-            return [_get_dataloader(split, name, args, **kwargs) for name in val_names]
+            # The worker count applies here too: validation reads *whole* videos,
+            # 167 of them per pass, so it is the most IO-bound part of the run.
+            # These loaders run inside one validation pass, so they share the one
+            # budget rather than each taking it.
+            built = [_get_dataloader(split, name, args, **kwargs)
+                     for name in val_names]
+            shares = _split_workers([loader.dataset for loader in built], workers)
+            return [_report_workers(_with_workers(loader, share), f"dev/{name}")
+                    for loader, share, name in zip(built, shares, val_names)]
         loader = _get_dataloader(split, dataset_names, args, **kwargs)
         if str(split) == "train" and mine.sampling == "frame":
-            return frame_uniform_loader(loader)
-        return loader
+            return _report_workers(frame_uniform_loader(loader, workers),
+                                   f"train/{dataset_names}")
+        return _report_workers(_with_workers(loader, workers), f"{split}/{dataset_names}")
 
+    # upstream hardcodes num_workers=8; reading is the bottleneck, so this is
+    # the single most valuable knob on a many-core node. Affinity, not
+    # os.cpu_count(): under SLURM the latter reports the whole machine, so a
+    # 4-CPU allocation on a 128-core node would spawn 32 workers and thrash.
+    available = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") \
+        else (os.cpu_count() or 8)
+    workers = mine.num_workers or max(1, min(32, available))
     upstream_train.get_dataloader = get_dataloader_multi
 
     # Validate on a step schedule, not an epoch one. `check_val_every_n_epoch=None`
@@ -218,16 +266,43 @@ def main() -> None:
             return getattr(self._module, name)
 
         def Trainer(self, *args, **kwargs):
-            return self._module.Trainer(*args, **{**kwargs, **self._extra})
+            merged = {**kwargs, **self._extra}
+            # callbacks are *added* to upstream's, never substituted for them:
+            # replacing the list would drop ModelCheckpoint and EarlyStopping
+            extra_callbacks = self._extra.get("callbacks") or []
+            if extra_callbacks:
+                merged["callbacks"] = list(kwargs.get("callbacks") or []) + \
+                    list(extra_callbacks)
+            return self._module.Trainer(*args, **merged)
 
-    upstream_train.pl = _TrainerShim(
-        upstream_train.pl,
-        {"val_check_interval": mine.val_every, "check_val_every_n_epoch": None})
+    # Everything the user sets is in *gradient* steps. Lightning's
+    # `val_check_interval` is the one exception: it counts training batches
+    # (`total_batch_idx`), so under accumulation it must be scaled or validation
+    # would fire every `val_every / accumulate` gradient steps. `global_step`,
+    # which drives checkpointing, early stopping and `metrics_every_n_steps`,
+    # already counts optimiser steps, and OneCycle is sized in them too.
+    # `val_check_interval` is filled in below, once `--val-every` is resolved
+    # against the step budget. The dict is captured by reference.
+    trainer_extra = {"val_check_interval": None,
+                     "check_val_every_n_epoch": None,
+                     "accumulate_grad_batches": mine.accumulate}
+    ValidationMetricsModel.accumulate = mine.accumulate
+    upstream_train.pl = _TrainerShim(upstream_train.pl, trainer_extra)
 
-    # only the phrase head has subtitle supervision
+    # Subtitle cues are translation units, so YouTube supervises phrases only
+    # and the sign head must be left out rather than fed empty labels.
     pretraining = "youtube_25" in args.datasets.split(",")
-    if pretraining:
-        ValidationMetricsModel.levels = ("sentence",)
+    levels = mine.levels
+    if levels == "auto":
+        levels = "phrase" if pretraining else "both"
+    ValidationMetricsModel.levels = {"both": ("sign", "sentence"),
+                                     "sign": ("sign",),
+                                     "phrase": ("sentence",)}[levels]
+    args.levels = levels
+    if levels != "both" and mine.select_on == "hm_iou":
+        raise SystemExit("--select-on hm_iou needs both heads; it is the "
+                         "harmonic mean of sign and phrase IoU. Use "
+                         "--select-on mean_mf1s with --levels " + levels)
     if mine.max_steps is None:
         # YouTube is ~40x the data, so it gets a longer budget by default
         mine.max_steps = 20000 if pretraining else 5000
@@ -255,7 +330,10 @@ def main() -> None:
     # otherwise a run stops mid-anneal, which is what early stopping used to do.
     if ("--epochs" not in rest and mine.max_steps) or mine.val_every is None:
         clips = dataset_size(args)
-        steps_per_epoch = math.ceil(clips / args.batch_size)
+        # optimiser steps, not batches: --max-steps counts gradient updates, and
+        # with accumulation a batch is no longer an update
+        batches_per_epoch = math.ceil(clips / args.batch_size)
+        steps_per_epoch = max(1, math.ceil(batches_per_epoch / mine.accumulate))
 
         if "--epochs" not in rest and mine.max_steps:
             args.epochs = max(1, math.ceil(mine.max_steps / steps_per_epoch))
@@ -267,6 +345,8 @@ def main() -> None:
         # epoch: 1% of DGS's 5,000 steps is 50, which would be five epochs.
         if mine.val_every is None:
             mine.val_every = max(1, min(mine.max_steps // 100, steps_per_epoch))
+
+    trainer_extra["val_check_interval"] = mine.val_every * mine.accumulate
 
     # sample train metrics ten times per evaluation, so both curves are smooth
     ValidationMetricsModel.metrics_every_n_steps = max(1, mine.val_every // 10)
@@ -295,6 +375,15 @@ def main() -> None:
 
     _common.create_bio = _create_bio_from_times_shim
 
+    # Pose windows are read one frame at a time, and Python's default 8 KB
+    # buffer turns that into a syscall per frame. On the network share each
+    # costs a round trip, so a 1024-frame window took 0.33 s to move 6.8 MB —
+    # twenty times slower than the share's 392 MB/s. A 4 MB buffer coalesces
+    # them: 0.33 s -> 0.031 s, measured. `open` is resolved from module globals
+    # before builtins, so binding it here reaches every read in that module and
+    # nothing else.
+    _common.open = functools.partial(builtins.open, buffering=4 * 1024 * 1024)
+
     # Upstream always installs EarlyStopping with `patience`; making patience
     # exceed the epoch budget is how it is disabled without patching the loop.
     if mine.early_stop == "off":
@@ -306,8 +395,9 @@ def main() -> None:
     weighting = mine.class_weights
     if weighting == "auto":
         weighting = "inverse" if args.dice_loss_weight == 0 else "none"
-    if weighting == "inverse":
-        ValidationMetricsModel.class_weights = inverse_class_weights(args)
+    if weighting in ("inverse", "inverse-b"):
+        ValidationMetricsModel.class_weights = inverse_class_weights(
+            args, ValidationMetricsModel.levels, scheme=weighting)
     args.class_weighting = weighting
 
     report_effective_config(args, mine, _dated_run_name(args.run_name))
@@ -345,11 +435,22 @@ def main() -> None:
                 print(f"cleaned up {run_dir}")
         return
 
+    # `validation_hm_iou` is logged inside upstream's `validation_step`, which
+    # ValidationMetricsModel overrides and never calls — monitoring that name
+    # would watch a metric nothing produces. Ours is logged in its place.
     monitor = {"mean_mf1s": "validation_mean_mf1s",
-               "hm_iou": "validation_hm_iou"}[mine.select_on]
+               "hm_iou": "validation_hm_iou_ours"}[mine.select_on]
     print(f"  selection    {monitor} (max)\n")
 
     write_run_config(run_dir, args, mine, monitor)
+
+    # panels follow the *running best* model: redrawn only when `monitor`
+    # improves, which is the same test ModelCheckpoint applies, so the figure in
+    # W&B always belongs to the checkpoint on disk
+    if not args.no_wandb:
+        from experiments.plot_callback import SegmentationPlotCallback
+        trainer_extra["callbacks"] = [SegmentationPlotCallback(
+            run_dir, val_names, monitor, phrase=mine.phrase)]
 
     # train() takes monitor_metric, so both ModelCheckpoint and EarlyStopping
     # follow it without patching anything
@@ -359,7 +460,101 @@ def main() -> None:
         evaluate_best_checkpoint(run_dir, phrase=mine.phrase, split=mine.eval_split)
 
 
-def frame_uniform_loader(loader):
+def _with_workers(loader, workers: int | None):
+    """Rebuild a DataLoader with a different worker count.
+
+    Upstream hardcodes `num_workers=8` inside its factory, and a DataLoader's
+    worker count cannot be changed after construction, so the loader is rebuilt
+    around the same dataset. Everything else is copied from the original.
+    """
+    from torch.utils.data import DataLoader
+
+    # never more workers than there are items to load: the DGS dev set is 12
+    # clips, and 32 workers there would leave 20 processes holding memory and
+    # doing nothing for the life of the run
+    workers = min(workers or 0, len(loader.dataset))
+    if not workers or workers == loader.num_workers:
+        return loader
+    # persistence and prefetching are copied from the loader upstream built, so
+    # raising the worker count changes only the worker count
+    persistent = bool(getattr(loader, "persistent_workers", False)) and workers > 0
+    return DataLoader(loader.dataset, batch_size=loader.batch_size,
+                      sampler=loader.sampler, collate_fn=loader.collate_fn,
+                      num_workers=workers, persistent_workers=persistent,
+                      prefetch_factor=getattr(loader, "prefetch_factor", 4),
+                      pin_memory=getattr(loader, "pin_memory", True))
+
+
+def _dataset_frames(dataset) -> float:
+    """Total frames behind a loader, the honest measure of how much it must read."""
+    from torch.utils.data import ConcatDataset
+
+    if isinstance(dataset, ConcatDataset):
+        return sum(_dataset_frames(part) for part in dataset.datasets)
+    items = getattr(dataset, "items", None)
+    if not items:
+        return float(len(dataset))
+    return float(sum(item.get("total_frames", 1) for item in items))
+
+
+def _split_workers(datasets, budget: int) -> list[int]:
+    """Divide one worker budget across loaders that run at the same time.
+
+    The validation sets are iterated back to back inside one validation pass, so
+    their workers coexist; handing each the full budget would oversubscribe the
+    CPUs. The split is by **frames**, since reading is what workers do and a
+    corpus of few long videos costs as much as one of many short ones.
+
+    Two guards. Every set gets at least half of an equal share, so a small set is
+    never left to serialise behind one worker — with the 32-CPU budget and two
+    dev sets that floor is 8. And no set gets more workers than it has clips.
+
+    On our sets: YouTube dev holds 85% of the frames and DGS 15%, so frames alone
+    would give 27 and 5; the floor lifts DGS to 8 and YouTube takes 24.
+
+    One case does not fit the budget: every loader keeps at least one worker,
+    since zero means loading synchronously in the main process. So a budget
+    smaller than the number of loaders returns one each and oversubscribes by the
+    difference. That needs an allocation of one or two CPUs to happen.
+    """
+    n = len(datasets)
+    if n == 0 or budget <= 0:
+        return [0] * n
+    if n == 1:
+        return [min(budget, max(1, len(datasets[0])))]
+
+    caps = [max(1, len(d)) for d in datasets]
+    floor = max(1, budget // (2 * n))
+    weights = [_dataset_frames(d) for d in datasets]
+    total = sum(weights) or 1.0
+
+    share = [min(caps[i], max(floor, round(budget * weights[i] / total)))
+             for i in range(n)]
+    # Rounding and the floor together can overshoot the budget. Settle it on the
+    # set that currently holds the most workers, where one either way changes the
+    # least in relative terms — taking it from the smallest set instead would
+    # just undo the floor that was the point.
+    while sum(share) > budget:
+        i = max(range(n), key=lambda j: share[j])
+        if share[i] <= 1:
+            break
+        share[i] -= 1
+    while sum(share) < budget:
+        candidates = [j for j in range(n) if share[j] < caps[j]]
+        if not candidates:
+            break
+        share[max(candidates, key=lambda j: weights[j])] += 1
+    return share
+
+
+def _report_workers(loader, label: str):
+    """Say how many workers each loader got, so the count is never a guess."""
+    print(f"  loader {label:<28} {len(loader.dataset):>6,} clips  "
+          f"{loader.num_workers:>2} workers")
+    return loader
+
+
+def frame_uniform_loader(loader, workers: int | None = None):
     """Redraw the training loader so each *frame* is equally likely to be seen.
 
     Upstream shuffles the clip list, so one 1024-frame window is drawn per video
@@ -383,7 +578,10 @@ def frame_uniform_loader(loader):
           f"({min(weights):,.0f}-{max(weights):,.0f} frames each)")
     return DataLoader(loader.dataset, batch_size=loader.batch_size,
                       sampler=sampler, collate_fn=loader.collate_fn,
-                      num_workers=loader.num_workers,
+                      # capped like _with_workers: --limit can leave fewer clips
+                      # than workers
+                      num_workers=min(workers or loader.num_workers,
+                                      len(loader.dataset)),
                       persistent_workers=loader.persistent_workers,
                       prefetch_factor=loader.prefetch_factor,
                       pin_memory=loader.pin_memory)
@@ -399,40 +597,121 @@ def dataset_size(args) -> int:
                               body_part_dropout=0.0))
 
 
-def inverse_class_weights(args, samples: int = 50, seed: int = 0) -> dict:
-    """2023's per-level inverse class frequency, measured on training windows.
+#: With `--class-weights inverse-b`, how much more an I frame is worth than an O
+#: frame. At 1.0 the two are equal, so B and I keep exactly the relationship the
+#: corpus gives them and the only change from inverse weighting is that O is
+#: brought down from its own inverse-frequency value. That value is what breaks a
+#: YouTube run: at 2% O it is 47, and the model then calls 78% of frames O.
+IO_RATIO = 1.0
 
-    v2023 counted classes over the whole training set and used `total / count[i]`
-    as each class's weight. We sample windows instead — the balance depends on
-    windowing and augmentation, so it has to be measured as the model sees it,
-    and a full pass would decode every clip at every startup.
+
+def inverse_class_weights(args, levels, cache_dir: Path = None,
+                          scheme: str = "inverse") -> dict:
+    """2023's per-level inverse class frequency, counted over the whole corpus.
+
+    v2023 counted classes over the entire training set and used `total / count[i]`
+    as each class's weight. This does the same, exactly: every training clip, not
+    a sample of random windows. It used to draw 50 windows, which put the phrase B
+    rate anywhere between 0.32% and 0.51% run to run — weights of 315 against 195
+    for one corpus.
+
+    Counted from the spans arithmetically rather than by decoding poses: a segment
+    contributes one B and `length - 1` I frames, and everything else is O. That is
+    the same label rule `create_bio_from_times` applies to within a frame, and it
+    turns an hour of decoding into a second of counting.
+
+    With frame-uniform sampling every frame is equally likely to be drawn, so the
+    corpus distribution is exactly what training windows converge to.
+
+    Cached on scratch, keyed by dataset, level set, phrase definition and the
+    clip list itself, so a changed split can never silently reuse old weights.
+
+    Two schemes. `inverse` is 2023's, `total / count` for every class. `inverse-b`
+    keeps the corpus relationship between B and I — `count_I / count_B`, which is
+    what inverse frequency gives those two — and only pulls O down, to
+    `IO_RATIO` against I's 1.
+
+    Use `inverse-b` when O is rare. Inverse weighting equalises the three classes'
+    contribution to the loss, which is harmless on DGS (57% O, so O and I both
+    land near 1.9 and only B is boosted) and destroys a YouTube run: at 2% O it
+    gives O a weight of 47 against I's 1. Measured on a run: the model called
+    78% of dev frames O where the gold on those clips is 14%, and phrase IoU
+    was 0.002 against the 0.85 the same setup reaches without it.
 
     Returns one weight per BIO class in upstream's order (UNK, O, B, I). UNK gets
     0: it marks padding, which the loss masks out anyway.
     """
-    from collections import Counter
+    import hashlib
 
-    import numpy as np
-
-    from sign_language_segmentation.datasets.common import Split
-
-    from experiments.dgs_dataset import DGSCorpusDataset
+    from sign_language_segmentation.datasets.common import (DATASET_REGISTRY,
+                                                            Split)
     from sign_language_segmentation.utils.bio import BIO
 
-    dataset = DGSCorpusDataset(split=Split.TRAIN, num_frames=args.num_frames,
-                               velocity=args.velocity, phrase=args.phrase)
-    picks = np.random.default_rng(seed).choice(
-        len(dataset), min(samples, len(dataset)), replace=False)
+    name = args.datasets.split(",")[0]
+    dataset = DATASET_REGISTRY[name].from_args(
+        Split.TRAIN, args, num_frames=args.num_frames, velocity=args.velocity,
+        fps_aug=False, frame_dropout=0.0, body_part_dropout=0.0)
 
+    signature = hashlib.sha256(
+        repr([(item["id"], item["total_frames"], len(item["glosses"]),
+               len(item["sentences"])) for item in dataset.items]
+             + [name, tuple(levels), getattr(args, "phrase", ""), scheme,
+                IO_RATIO]
+             ).encode()).hexdigest()[:16]
+    cache_dir = Path(cache_dir or CACHE_DIR)
+    cache_path = cache_dir / f"class_weights_{name}_{scheme}_{signature}.json"
+    if cache_path.exists():
+        weights = json.loads(cache_path.read_text())
+        print(f"class weights from cache {cache_path.name}: "
+              + "  ".join(f"{level} B {weights[level][BIO['B']]:.1f}"
+                          for level in weights))
+        return weights
+
+    spans_for = {"sign": "glosses", "sentence": "sentences"}
     weights = {}
-    for level in ("sign", "sentence"):
-        counts: Counter = Counter()
-        for i in picks:
-            counts.update(dataset[int(i)]["bio"][level].numpy().tolist())
-        total = sum(counts.values())
-        weights[level] = [0.0 if name == "UNK" or not counts.get(index)
-                          else total / counts[index]
-                          for name, index in BIO.items()]
+    for level in levels:
+        b = i = total = 0
+        for item in dataset.items:
+            frames = int(item["total_frames"])
+            total += frames
+            for span in item[spans_for[level]]:
+                # milliseconds in, frames out; a one-frame span is B alone
+                length = max(1, round((span["end"] - span["start"])
+                                      / 1000 * item["fps"]))
+                b += 1
+                i += length - 1
+        o = max(0, total - b - i)
+        if o == 0:
+            # spans covering every frame would give O a weight of 0 under
+            # `inverse`, silently removing the class from the loss
+            print(f"  WARNING {name}/{level}: no O frames at all — spans cover "
+                  f"the whole corpus, or they overlap enough to look like it")
+        counts = {BIO["O"]: o, BIO["B"]: b, BIO["I"]: i}
+        if scheme == "inverse-b":
+            # B by inverse frequency, anchored so I would be 1; O and I by hand
+            by_class = {BIO["O"]: 1.0, BIO["I"]: IO_RATIO,
+                        BIO["B"]: (i / b) if b else 1.0}
+        else:
+            by_class = {index: (total / counts[index]) if counts[index] else 0.0
+                        for index in counts}
+        weights[level] = [0.0 if key == "UNK" else by_class[index]
+                          for key, index in BIO.items()]
+        # a loud check on the trap that cost one run: inverse weighting on a
+        # corpus with little O pushes the model to predict O everywhere
+        ratio = weights[level][BIO["O"]] / max(weights[level][BIO["I"]], 1e-9)
+        if scheme == "inverse" and ratio > 10:
+            print(f"  WARNING {name}/{level}: inverse weighting gives O "
+                  f"{ratio:.0f}x the weight of I ({counts[BIO['O']] / total:.2%} "
+                  f"of frames are O). This collapses the model onto O. "
+                  f"Use --class-weights inverse-b.")
+        print(f"class weights {name}/{level} over {total:,} frames: "
+              + "  ".join(f"{key} {counts[index] / max(total, 1):.4%} -> "
+                          f"{weights[level][index]:.1f}"
+                          for key, index in BIO.items() if key != "UNK"))
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(weights))
+    print(f"cached to {cache_path}")
     return weights
 
 
@@ -452,8 +731,12 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"\n              {dgs_data.BACKUP}"
           f"\n  phrase gold {mine.phrase}"
           f"\n  run/wandb   {run_name}  ->  project {args.wandb_project}"
-          f"\n  validate on {args.val_datasets}  (first is in-domain, selects the checkpoint)"
-          f"\n  training    batch {args.batch_size}  epochs {args.epochs}  "
+          f"\n  levels      {args.levels}"
+          + f"\n  validate on {args.val_datasets}  (first is in-domain, selects the checkpoint)"
+          + f"\n  training    batch {args.batch_size}"
+          + (f" x {mine.accumulate} accumulated = {args.batch_size * mine.accumulate}"
+             if mine.accumulate > 1 else "")
+          + f"  epochs {args.epochs}  "
           f"patience {args.patience}  lr {args.learning_rate:g}  {args.optimizer}"
           f"\n  tricks OFF  dice {args.dice_loss_weight:g}  "
           f"frame_dropout {args.frame_dropout:g}  "
@@ -464,8 +747,12 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"\n  validate    every {mine.val_every} steps"
           f"\n  schedule    ~{mine.max_steps:,} steps = {args.epochs} epochs, early stop "
           f"{'off (OneCycle runs to completion)' if mine.early_stop == 'off' else f'patience {args.patience}'}"
-          f"\n  loss        {'NLL' if args.class_weighting == 'none' else 'NLL + inverse class weights (2023)'}"
-          f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
+          f"\n  loss        " + {
+              "none": "NLL, unweighted",
+              "inverse": "NLL + inverse class weights (2023)",
+              "inverse-b": f"NLL + inverse B weight, O 1.0 / I {IO_RATIO}",
+          }[args.class_weighting]
+          + f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
           + (f"\n  LIMIT       {args.limit} clips per split — NOT a reportable run"
              if args.limit else ""))
 
@@ -596,14 +883,24 @@ def dry_run(args) -> None:
     """
     import torch
 
-    from sign_language_segmentation.datasets.common import Split, get_dataloader
-    from sign_language_segmentation.model.model import PoseTaggingModel
+    import sign_language_segmentation.train as upstream_train
 
+    from sign_language_segmentation.datasets.common import Split
+    # the subclass we actually train with, so a dry run exercises our loss —
+    # levels, class weights and the Dice guard — not just upstream's forward
+    from experiments.validation_metrics import ValidationMetricsModel
+
+    # the *patched* factory, so the dry run sees what training sees:
+    # frame-uniform sampling, one loader per validation set, and our worker
+    # counts. Importing common.get_dataloader directly tested none of it.
     loaders = {}
     for split, batch_size in ((Split.TRAIN, args.batch_size), (Split.DEV, 1)):
-        loaders[split] = get_dataloader(split=split, dataset_names=args.datasets,
-                                        args=args, batch_size=batch_size,
-                                        persistent_workers=False)
+        loader = upstream_train.get_dataloader(split=split,
+                                               dataset_names=args.datasets,
+                                               args=args, batch_size=batch_size,
+                                               persistent_workers=False)
+        # the dev split comes back as one loader per validation set
+        loaders[split] = loader[0] if isinstance(loader, list) else loader
         print(f"{split}: {len(loaders[split].dataset)} clips, "
               f"{len(loaders[split])} batches of {batch_size}")
 
@@ -620,7 +917,7 @@ def dry_run(args) -> None:
     print(f"\nbatch          pose {tuple(batch['pose'].shape)}  "
           f"lengths {batch['lengths'].tolist()}")
 
-    model = PoseTaggingModel(
+    model = ValidationMetricsModel(
         pose_dims=(joints, dims), hidden_dim=args.hidden_dim,
         encoder_depth=args.encoder_depth, learning_rate=args.learning_rate,
         steps_per_epoch=len(loaders[Split.TRAIN]), max_epochs=args.epochs,
@@ -637,6 +934,8 @@ def dry_run(args) -> None:
           f"sentence {tuple(out['sentence'].shape)}")
 
     loss = model.step(batch, name="dry_run")
+    print(f"levels         {ValidationMetricsModel.levels}"
+          f"  class weights {'set' if ValidationMetricsModel.class_weights else 'none'}")
     print(f"loss           {float(loss):.4f}")
     print("\ndry run OK — data, model and loss all wire up")
 
