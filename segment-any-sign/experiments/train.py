@@ -164,6 +164,14 @@ def main() -> None:
                            "batch 64, so 128 would not fit. Note a step becomes "
                            "N optimiser-free forwards, so --max-steps counts "
                            "optimiser steps and the run gets N times longer")
+    ours.add_argument("--weights-from", default=None, metavar="DATASET",
+                      help="measure class weights on this dataset instead of the "
+                           "one being trained on. YouTube's own inverse weights "
+                           "give O 47x the weight of I and collapse the model "
+                           "onto O; DGS is balanced enough for 2023's formula to "
+                           "behave, so --weights-from dgs_corpus carries that "
+                           "formula over to a corpus it cannot be applied to "
+                           "directly")
     ours.add_argument("--levels", default="auto",
                       choices=["auto", "both", "sign", "phrase"],
                       help="which heads carry supervision. auto = phrase only "
@@ -397,8 +405,10 @@ def main() -> None:
         weighting = "inverse" if args.dice_loss_weight == 0 else "none"
     if weighting in ("inverse", "inverse-b"):
         ValidationMetricsModel.class_weights = inverse_class_weights(
-            args, ValidationMetricsModel.levels, scheme=weighting)
+            args, ValidationMetricsModel.levels, scheme=weighting,
+            source=mine.weights_from)
     args.class_weighting = weighting
+    args.class_weights_from = mine.weights_from or args.datasets.split(",")[0]
 
     report_effective_config(args, mine, _dated_run_name(args.run_name))
 
@@ -606,7 +616,7 @@ IO_RATIO = 1.0
 
 
 def inverse_class_weights(args, levels, cache_dir: Path = None,
-                          scheme: str = "inverse") -> dict:
+                          scheme: str = "inverse", source: str = None) -> dict:
     """2023's per-level inverse class frequency, counted over the whole corpus.
 
     v2023 counted classes over the entire training set and used `total / count[i]`
@@ -622,6 +632,12 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
 
     With frame-uniform sampling every frame is equally likely to be drawn, so the
     corpus distribution is exactly what training windows converge to.
+
+    `source` measures on a different corpus than the one being trained on. That
+    is not a hack for its own sake: 2023's formula needs a corpus where O is
+    common, and YouTube's 2% O breaks it, while DGS's 57% O is exactly the
+    balance the formula was written against. The weights carried over are then
+    deterministic and use 2023's rule unchanged.
 
     Cached on scratch, keyed by dataset, level set, phrase definition and the
     clip list itself, so a changed split can never silently reuse old weights.
@@ -647,7 +663,7 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
                                                             Split)
     from sign_language_segmentation.utils.bio import BIO
 
-    name = args.datasets.split(",")[0]
+    name = source or args.datasets.split(",")[0]
     dataset = DATASET_REGISTRY[name].from_args(
         Split.TRAIN, args, num_frames=args.num_frames, velocity=args.velocity,
         fps_aug=False, frame_dropout=0.0, body_part_dropout=0.0)
@@ -658,6 +674,21 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
              + [name, tuple(levels), getattr(args, "phrase", ""), scheme,
                 IO_RATIO]
              ).encode()).hexdigest()[:16]
+    def warn_if_o_dominates(weights: dict) -> None:
+        """The trap that cost one run: inverse weighting on a corpus with little
+        O pushes the model to predict O everywhere. Checked on the weights
+        themselves, not while counting, so a cached read is guarded too — the
+        cache persists, so a warning that only fired on a miss would never fire
+        again."""
+        for level, w in weights.items():
+            if scheme != "inverse":
+                return
+            if w[BIO["O"]] > 10 * max(w[BIO["I"]], 1e-9):
+                print(f"  WARNING {name}/{level}: inverse weighting gives O "
+                      f"{w[BIO['O']] / w[BIO['I']]:.0f}x the weight of I. This "
+                      f"collapses the model onto O. Use --class-weights "
+                      f"inverse-b, or --weights-from a corpus with more O.")
+
     cache_dir = Path(cache_dir or CACHE_DIR)
     cache_path = cache_dir / f"class_weights_{name}_{scheme}_{signature}.json"
     if cache_path.exists():
@@ -665,6 +696,7 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
         print(f"class weights from cache {cache_path.name}: "
               + "  ".join(f"{level} B {weights[level][BIO['B']]:.1f}"
                           for level in weights))
+        warn_if_o_dominates(weights)
         return weights
 
     spans_for = {"sign": "glosses", "sentence": "sentences"}
@@ -696,19 +728,12 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
                         for index in counts}
         weights[level] = [0.0 if key == "UNK" else by_class[index]
                           for key, index in BIO.items()]
-        # a loud check on the trap that cost one run: inverse weighting on a
-        # corpus with little O pushes the model to predict O everywhere
-        ratio = weights[level][BIO["O"]] / max(weights[level][BIO["I"]], 1e-9)
-        if scheme == "inverse" and ratio > 10:
-            print(f"  WARNING {name}/{level}: inverse weighting gives O "
-                  f"{ratio:.0f}x the weight of I ({counts[BIO['O']] / total:.2%} "
-                  f"of frames are O). This collapses the model onto O. "
-                  f"Use --class-weights inverse-b.")
         print(f"class weights {name}/{level} over {total:,} frames: "
               + "  ".join(f"{key} {counts[index] / max(total, 1):.4%} -> "
                           f"{weights[level][index]:.1f}"
                           for key, index in BIO.items() if key != "UNK"))
 
+    warn_if_o_dominates(weights)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(weights))
     print(f"cached to {cache_path}")
@@ -752,6 +777,8 @@ def report_effective_config(args, mine, run_name: str) -> None:
               "inverse": "NLL + inverse class weights (2023)",
               "inverse-b": f"NLL + inverse B weight, O 1.0 / I {IO_RATIO}",
           }[args.class_weighting]
+          + (f", measured on {args.class_weights_from}"
+             if args.class_weights_from != args.datasets.split(",")[0] else "")
           + f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
           + (f"\n  LIMIT       {args.limit} clips per split — NOT a reportable run"
              if args.limit else ""))
