@@ -135,6 +135,9 @@ For scale: DGS train is 91 hours and 61k phrases, so this is **~40x the hours** 
 
 ### Runs
 
-| # | run | change | phrase IoU | phrase % | phrase mF1S |
-|---|---|---|---|---|---|
-| | | _(nothing yet)_ | | | |
+| # | run | change | phrase F1-ma | phrase IoU | phrase % | phrase mF1S |
+|---|---|---|---|---|---|---|
+| — | Seq2Seq + attention (ACL SRW 2025)\* | reference | 0.60 | 0.62 | 0.95 | — |
+| | | _(nothing yet)_ | | | | |
+
+\* Their best YouTube-ASL row, Table 3 ([notes](../literature/2025-temporal-boundary-identification/)), scored on **their** YouTube-ASL split, not ours: ASL alone against our 56 languages, ResNet-101 over RGB and optical flow against MediaPipe pose, and their own decoding. Not a like-for-like score, but the only published point on subtitle-supervised YouTube segmentation.
