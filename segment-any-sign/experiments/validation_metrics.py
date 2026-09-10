@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 from sign_language_segmentation.metrics import bio_labels_to_segments  # noqa: E402
@@ -63,9 +64,13 @@ def _remap(labels: torch.Tensor) -> torch.Tensor:
     return out
 
 
+#: our BIO ids, in the order the confusion matrix indexes them
+CLASSES = ("O", "B", "I")
+
+
 def _empty() -> dict:
     return {our: {"frame_f1": [], "frame_f1_micro": [], "iou": [], "percentage": [],
-                  "counts": None}
+                  "counts": None, "confusion": None}
             for our in LEVELS.values()}
 
 
@@ -166,6 +171,13 @@ class ValidationMetricsModel(PoseTaggingModel):
                     pred_bio = _remap(probs.argmax(dim=1)).numpy()
 
                     bucket = collected[our]
+                    # gold x pred counts over O/B/I, summed across clips. Macro and
+                    # micro F1 both hide *which* class is wrong, and every failure
+                    # so far has been one class: O predicted everywhere, then B.
+                    pair = np.bincount(gold_bio.astype(int) * 3 + pred_bio.astype(int),
+                                       minlength=9).reshape(3, 3)
+                    bucket["confusion"] = pair if bucket["confusion"] is None \
+                        else bucket["confusion"] + pair
                     # labels=None matches score.py: average over present classes
                     bucket["frame_f1"].append(frame_f1(pred_bio, gold_bio, labels=None))
                     bucket["frame_f1_micro"].append(
@@ -239,6 +251,8 @@ class ValidationMetricsModel(PoseTaggingModel):
                 mf1s[our] = mf1s_from_counts(bucket["counts"])
                 self.log(f"{prefix}_{our}_mf1s", mf1s[our], prog_bar=False)
 
+        self._log_classes(collected, prefix)
+
         # mirrors upstream's validation_hm_iou so the two curves can be overlaid.
         # Upstream logs its own `validation_hm_iou`; ours is named differently to
         # avoid ever shadowing the metric that selects the checkpoint.
@@ -266,6 +280,71 @@ class ValidationMetricsModel(PoseTaggingModel):
             self.log(f"{prefix}_mean_mf1s",
                      sum(mf1s.get(our, 0.0) for our in supervised) / len(supervised),
                      prog_bar=(prefix == "validation"))
+
+    def _log_classes(self, collected: dict, prefix: str) -> None:
+        """Per-class shares and scores, under a `classes/` prefix of their own.
+
+        The gold share is logged beside the predicted one so the panel carries its
+        own reference line: a model calling 27% of frames B against a gold 0.48%
+        is visible immediately, rather than after someone goes and measures it.
+        """
+        for our, bucket in collected.items():
+            pair = bucket.get("confusion")
+            if pair is None or not pair.sum():
+                continue
+            total = float(pair.sum())
+            for index, name in enumerate(CLASSES):
+                hit = float(pair[index, index])
+                gold = float(pair[index].sum())
+                pred = float(pair[:, index].sum())
+                precision = hit / pred if pred else 0.0
+                recall = hit / gold if gold else 0.0
+                f1 = (2 * precision * recall / (precision + recall)
+                      if precision + recall else 0.0)
+                stem = f"classes/{prefix}_{our}_{name}"
+                self.log(f"{stem}_pred_share", pred / total)
+                self.log(f"{stem}_gold_share", gold / total)
+                self.log(f"{stem}_precision", precision)
+                self.log(f"{stem}_recall", recall)
+                self.log(f"{stem}_f1", f1)
+
+    #: log gradient diagnostics every N optimiser steps. Cheap — one pass over
+    #: 5.7M gradients against a ~0.6 s step — but not free, so it is a knob.
+    grad_log_every = 1
+
+    def on_before_optimizer_step(self, optimizer) -> None:
+        """Gradient diagnostics, once per optimiser step, *before* clipping.
+
+        Lightning calls this hook immediately before `_clip_gradients`, so these
+        are the raw norms — which is what you need to choose a clip threshold.
+        With accumulation the gradient here is already the accumulated one, so
+        the norms describe the effective batch, not the micro-batch.
+
+        Per-module norms separate a genuinely large update from one head blowing
+        up: the phrase head sits on a class that is 0.6% of frames, and its
+        gradient is the heavy-tailed one.
+        """
+        if self.grad_log_every <= 0 or self.global_step % self.grad_log_every:
+            return
+        total = torch.zeros((), device=self.device)
+        biggest = torch.zeros((), device=self.device)
+        for name, module in (("cnn", self.frame_cnn),
+                             ("input_norm", self.input_norm),
+                             ("encoder", self.encoder_attn),
+                             ("sign_head", self.sign_bio_head),
+                             ("phrase_head", self.sentence_bio_head)):
+            squares = [p.grad.pow(2).sum() for p in module.parameters()
+                       if p.grad is not None]
+            if not squares:
+                continue
+            group = torch.stack(squares).sum()
+            total = total + group
+            self.log(f"grad/norm_{name}", group.sqrt())
+            peaks = [p.grad.abs().max() for p in module.parameters()
+                     if p.grad is not None]
+            biggest = torch.maximum(biggest, torch.stack(peaks).max())
+        self.log("grad/norm", total.sqrt(), prog_bar=False)
+        self.log("grad/max_abs", biggest)
 
     _train_collected = None
 

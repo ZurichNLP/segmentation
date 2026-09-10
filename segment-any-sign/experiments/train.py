@@ -140,14 +140,15 @@ def main() -> None:
     ours.add_argument("--fps-aug", choices=["on", "off"], default="off",
                       help="random 25-50 fps resampling per training clip")
     ours.add_argument("--class-weights", default="auto",
-                      choices=["auto", "inverse", "inverse-b", "none"],
                       help="loss class weighting. auto (default) = 2023's inverse "
                            "class frequency when dice is off, unweighted when it "
                            "is on, so the loss is always one model's or the "
                            "other's and never a hybrid. 'inverse-b' weights only "
                            "B, the boundary class, by inverse frequency and "
                            "leaves O and I flat — for a corpus too imbalanced "
-                           "for inverse weighting to be safe on those two")
+                           "for inverse weighting to be safe on those two. An "
+                           "explicit 'O,B,I' triple sets the weights by hand, "
+                           "e.g. '2,20,1'")
     ours.add_argument("--select-on", default="mean_mf1s",
                       choices=["mean_mf1s", "hm_iou"],
                       help="checkpoint selection metric (default mean_mf1s: the "
@@ -164,6 +165,15 @@ def main() -> None:
                            "batch 64, so 128 would not fit. Note a step becomes "
                            "N optimiser-free forwards, so --max-steps counts "
                            "optimiser steps and the run gets N times longer")
+    ours.add_argument("--grad-clip", type=float, default=0.0, metavar="NORM",
+                      help="clip the gradient to this L2 NORM (0 = off). This "
+                           "rescales the whole gradient vector when its norm "
+                           "exceeds NORM; it does not clamp individual elements. "
+                           "Pick it from the logged grad/norm: a value below the "
+                           "typical norm rescales every step and is just a "
+                           "learning-rate cut")
+    ours.add_argument("--grad-log-every", type=int, default=1, metavar="N",
+                      help="log gradient norms every N optimiser steps (0 = off)")
     ours.add_argument("--weights-from", default=None, metavar="DATASET",
                       help="measure class weights on this dataset instead of the "
                            "one being trained on. YouTube's own inverse weights "
@@ -293,8 +303,10 @@ def main() -> None:
     # against the step budget. The dict is captured by reference.
     trainer_extra = {"val_check_interval": None,
                      "check_val_every_n_epoch": None,
-                     "accumulate_grad_batches": mine.accumulate}
+                     "accumulate_grad_batches": mine.accumulate,
+                     "gradient_clip_val": mine.grad_clip or None}
     ValidationMetricsModel.accumulate = mine.accumulate
+    ValidationMetricsModel.grad_log_every = mine.grad_log_every
     upstream_train.pl = _TrainerShim(upstream_train.pl, trainer_extra)
 
     # Subtitle cues are translation units, so YouTube supervises phrases only
@@ -403,6 +415,23 @@ def main() -> None:
     weighting = mine.class_weights
     if weighting == "auto":
         weighting = "inverse" if args.dice_loss_weight == 0 else "none"
+    if weighting not in ("inverse", "inverse-b", "none"):
+        # an explicit O,B,I triple. Set by hand when neither scheme lands where
+        # the evidence says it should — every automatic rule we have either
+        # ignores O or over-weights B on this corpus.
+        try:
+            o, b, i = (float(x) for x in weighting.split(","))
+        except ValueError:
+            raise SystemExit(
+                f"--class-weights must be auto, inverse, inverse-b, none, or an "
+                f"'O,B,I' triple such as '2,20,1'; got {weighting!r}")
+        if mine.weights_from:
+            raise SystemExit("--weights-from measures weights on a corpus; it "
+                             "means nothing beside an explicit --class-weights "
+                             "triple. Drop one.")
+        ValidationMetricsModel.class_weights = {
+            level: [0.0, o, b, i] for level in ValidationMetricsModel.levels}
+        print(f"class weights (explicit): O {o:g}  B {b:g}  I {i:g}")
     if weighting in ("inverse", "inverse-b"):
         ValidationMetricsModel.class_weights = inverse_class_weights(
             args, ValidationMetricsModel.levels, scheme=weighting,
@@ -769,6 +798,8 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"attn_dropout {args.attn_dropout:g}  velocity {args.velocity}"
           f"\n  tricks ON   fps_aug {args.fps_aug}  num_frames {args.num_frames}"
           f"\n  sampling    {mine.sampling}-uniform"
+          f"\n  gradients   clip {mine.grad_clip or 'off'}"
+          f"  norms logged every {mine.grad_log_every or 'never'} steps"
           f"\n  validate    every {mine.val_every} steps"
           f"\n  schedule    ~{mine.max_steps:,} steps = {args.epochs} epochs, early stop "
           f"{'off (OneCycle runs to completion)' if mine.early_stop == 'off' else f'patience {args.patience}'}"
@@ -776,7 +807,8 @@ def report_effective_config(args, mine, run_name: str) -> None:
               "none": "NLL, unweighted",
               "inverse": "NLL + inverse class weights (2023)",
               "inverse-b": f"NLL + inverse B weight, O 1.0 / I {IO_RATIO}",
-          }[args.class_weighting]
+          }.get(args.class_weighting,
+                f"NLL + explicit class weights O,B,I = {args.class_weighting}")
           + (f", measured on {args.class_weights_from}"
              if args.class_weights_from != args.datasets.split(",")[0] else "")
           + f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
