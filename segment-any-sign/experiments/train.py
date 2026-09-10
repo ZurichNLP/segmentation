@@ -481,6 +481,7 @@ def main() -> None:
                "hm_iou": "validation_hm_iou_ours"}[mine.select_on]
     print(f"  selection    {monitor} (max)\n")
 
+    link_slurm_log(run_dir)
     write_run_config(run_dir, args, mine, monitor)
 
     # panels follow the *running best* model: redrawn only when `monitor`
@@ -814,6 +815,38 @@ def report_effective_config(args, mine, run_name: str) -> None:
           + f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
           + (f"\n  LIMIT       {args.limit} clips per split — NOT a reportable run"
              if args.limit else ""))
+
+
+def link_slurm_log(run_dir: Path) -> None:
+    """Symlink this job's SLURM log into the run directory.
+
+    The log lands under a job id and the run directory under a date, so the two
+    are otherwise only connected through squeue — which forgets. The path comes
+    from `scontrol`, not from reconstructing the `--output` pattern, so changing
+    that pattern cannot silently produce a dangling link.
+
+    Best effort: no SLURM, no scontrol, or an unreadable answer all just mean no
+    link. A missing convenience must never stop a run that is ready to train.
+    """
+    import subprocess
+
+    job = os.environ.get("SLURM_JOB_ID")
+    if not job:
+        return
+    try:
+        out = subprocess.check_output(["scontrol", "show", "job", job], text=True,
+                                      stderr=subprocess.DEVNULL, timeout=30)
+        path = next(field.split("=", 1)[1] for line in out.splitlines()
+                    for field in line.split() if field.startswith("StdOut="))
+    except Exception as error:
+        print(f"no SLURM log link: {type(error).__name__}: {error}")
+        return
+    run_dir.mkdir(parents=True, exist_ok=True)
+    link = run_dir / "slurm.out"
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(path)
+    print(f"linked {link} -> {path}")
 
 
 def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
