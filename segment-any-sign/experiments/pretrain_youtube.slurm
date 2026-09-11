@@ -29,7 +29,7 @@
 # change cannot move a hyperparameter silently. See experiments/README.md.
 #
 # Sizing, from measurement rather than guesswork:
-#   * 50,000 optimiser steps at ~0.83 steps/s is about 17 h. The 36 h wall gives
+#   * 40,000 optimiser steps at ~0.83 steps/s is about 13 h. The 36 h wall gives
 #     room for a slow node; `--max_time` stops the run an hour before SLURM
 #     would kill it, so the final checkpoint is written rather than lost.
 #   * peak GPU memory was 53 GB of 80, so either an 80 GB A100 or an H100 fits.
@@ -72,7 +72,7 @@ srun "$PYTHON" experiments/train.py \
     --velocity off \
     --fps-aug off \
     --early-stop off \
-    --max-steps 50000 \
+    --max-steps 40000 \
     --val-every 400 \
     --accumulate 2 \
     --num-workers 32 \

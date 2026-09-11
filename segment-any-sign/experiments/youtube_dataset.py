@@ -41,6 +41,7 @@ class YouTube25Dataset(BaseSegmentationDataset):
         frame_dropout: float = 0.0,
         body_part_dropout: float = 0.0,
         per_language: int = yt.DEV_PER_LANGUAGE,
+        dev_filter: bool = True,
         limit: int | None = None,
         **_ignored,
     ):
@@ -50,11 +51,13 @@ class YouTube25Dataset(BaseSegmentationDataset):
         self.fps_aug = fps_aug
         self.frame_dropout = frame_dropout
         self.body_part_dropout = body_part_dropout
+        self.dev_filter = dev_filter
 
         self._init_split_tracking()
         self.items = []
         name = "dev" if split in (Split.DEV, "dev", "validation") else "train"
-        for spec in yt.clip_specs(name, per_language=per_language):
+        for spec in yt.clip_specs(name, per_language=per_language,
+                                  dev_filter=dev_filter):
             if limit is not None and len(self.items) >= limit:
                 break
             self.items.append({
@@ -98,6 +101,7 @@ class YouTube25Dataset(BaseSegmentationDataset):
     def get_split_manifest(self) -> dict:
         return {"dataset": self.dataset_name, "source": yt.ROOT,
                 "level": "phrase only (sign head masked)",
+                "dev_filter": self.dev_filter,
                 "splits": {s.value: sorted(ids)
                            for s, ids in self._all_split_ids.items()}}
 
@@ -106,6 +110,7 @@ class YouTube25Dataset(BaseSegmentationDataset):
         return cls(split=split,
                    per_language=getattr(args, "dev_per_language",
                                         yt.DEV_PER_LANGUAGE),
+                   dev_filter=getattr(args, "dev_filter", "on") == "on",
                    limit=getattr(args, "limit", None),
                    **augment_kwargs)
 

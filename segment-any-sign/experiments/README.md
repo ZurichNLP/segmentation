@@ -135,16 +135,22 @@ For scale: DGS train is 91 hours and 61k phrases, so this is **~40x the hours** 
 
 ### Runs
 
-All phrase level, all dev. **In domain** is the 167-video language-balanced YouTube-SL-25 dev set; **out of domain** is DGS validation, which these models never train on.
+All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twice: *filtered* is the 82 videos over 46 sign languages whose subtitle timings survive `DEV_FILTER`, and is the set runs now select on; *raw* is all 167, which is what every run before 2026-09-11 selected on. **Out of domain** is DGS validation, which these models never train on.
 
-| | | | | In domain (YouTube) | | | | Out of domain (DGS) | | | |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| **#** | **run** | **change** | **step** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** |
-| — | Seq2Seq + attention (ACL SRW 2025)\* | reference | — | 0.60 | 0.62 | 0.95 | — | — | — | — | — |
-| 1 | `02_pretrain_youtube-2026.09.09` | DGS-measured inverse weights (O 1.8, B 269, I 2.3), 100k steps | 16,426 | 0.469 | 0.868 | 2.016 | 0.267 | 0.224 | 0.578 | 4.860 | 0.207 |
-| 2 | `02_pretrain_youtube-2026.09.10` | weights 2,20,1, 50k steps | 23,237 | 0.531 | 0.433 | 0.300 | 0.138 | 0.255 | 0.280 | 0.020 | 0.000 |
-| 3 | `02_pretrain_youtube_b80-2026.09.10` | weights 2,80,1, 50k steps | 17,628 | 0.514 | 0.845 | 1.260 | 0.339 | 0.301 | 0.587 | 0.683 | 0.206 |
+| | | | | Filtered YouTube dev | | | | Raw YouTube dev | | | | Out of domain (DGS) | | | |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **#** | **run** | **change** | **step** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** |
+| — | Seq2Seq + attention (ACL SRW 2025)\* | reference | — | 0.60 | 0.62 | 0.95 | — | — | — | — | — | — | — | — | — |
+| 1 | `02_pretrain_youtube-2026.09.09` | DGS-measured inverse weights (O 1.8, B 269, I 2.3), 100k steps | 16,426 | 0.496 | 0.869 | 2.041 | 0.292 | 0.469 | 0.868 | 2.021 | 0.267 | 0.224 | 0.578 | 4.860 | 0.207 |
+| 2 | `02_pretrain_youtube-2026.09.10` | weights 2,20,1, 50k steps | 23,237 | 0.551 | 0.468 | 0.319 | 0.163 | 0.531 | 0.434 | 0.296 | 0.137 | 0.255 | 0.280 | 0.020 | 0.000 |
+| 3 | `02_pretrain_youtube_b80-2026.09.10` | weights 2,80,1, 50k steps | 17,628 | 0.534 | 0.852 | 1.363 | 0.367 | 0.514 | 0.845 | 1.255 | 0.338 | 0.301 | 0.587 | 0.683 | 0.206 |
 
-`step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run here selected between 16k and 23k, so the back half of each bought nothing. `%` is best nearest **1**. YouTube numbers come from the training-time validation metrics at that checkpoint; DGS numbers from `benchmark/score.py` on written predictions, the protocol the benchmark uses. Both call the same [`../metrics/`](../metrics/) code and agree on DGS F1-ma and IoU to three decimals, differing on `%` and mF1S because one averages per clip and the other aggregates over the corpus.
+`step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run here selected between 16k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
+
+**Filtering the dev set moves every number up and changes no ranking**: frame F1 by about 0.02 and mF1S by about 0.03, uniformly across all three runs, which is what scoring against labels that are less wrong should do. It is a cleaner ruler, not a different one.
+
+Both YouTube columns come from [`eval_youtube.py`](eval_youtube.py) on the written checkpoint, and DGS from `benchmark/score.py` on written predictions; all three call the same [`../metrics/`](../metrics/) code and the same decoder. The scorer reproduces the training-time numbers for run 3 to three decimals, which is the check that matters since the two paths share no code above `metrics/`.
+
+Each run writes two figures per validation set beside its checkpoints, and logs them to W&B: `segments_<set>_phrase_120s.png` is two minutes of ribbons, `segments_<set>_phrase_1024f.png` one 1024-frame window with a keyframe strip and the subtitle text. See [`plot_segmentation.py`](plot_segmentation.py).
 
 \* Their best YouTube-ASL row, Table 3 ([notes](../literature/2025-temporal-boundary-identification/)), scored on **their** YouTube-ASL split, not ours: ASL alone against our 56 languages, ResNet-101 over RGB and optical flow against MediaPipe pose, and their own decoding. Not a like-for-like score, but the only published point on subtitle-supervised YouTube segmentation.

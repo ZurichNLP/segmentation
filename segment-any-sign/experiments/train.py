@@ -165,6 +165,19 @@ def main() -> None:
                            "batch 64, so 128 would not fit. Note a step becomes "
                            "N optimiser-free forwards, so --max-steps counts "
                            "optimiser steps and the run gets N times longer")
+    ours.add_argument("--sample-schedule", choices=["off", "linear", "cosine"],
+                      default="off",
+                      help="decay the sampling weight of videos whose subtitle "
+                           "timings fail DEV_FILTER, from full to a quarter over "
+                           "the run. Needs --sampling frame. Off by default: it "
+                           "changes what the model sees, so it belongs in its own "
+                           "run")
+    ours.add_argument("--dev-filter", choices=["on", "off"], default="on",
+                      help="score YouTube dev on the videos whose subtitle "
+                           "timings survive DEV_FILTER (82 of 164, 46 of 56 sign "
+                           "languages) rather than all of them. Checkpoint "
+                           "selection follows the same set, so 'off' reproduces "
+                           "what every run before 2026-09-11 selected on")
     ours.add_argument("--grad-clip", type=float, default=0.0, metavar="NORM",
                       help="clip the gradient to this L2 NORM (0 = off). This "
                            "rescales the whole gradient vector when its norm "
@@ -319,13 +332,19 @@ def main() -> None:
                                      "sign": ("sign",),
                                      "phrase": ("sentence",)}[levels]
     args.levels = levels
+    args.dev_filter = mine.dev_filter
+    args.sample_schedule = mine.sample_schedule
     if levels != "both" and mine.select_on == "hm_iou":
         raise SystemExit("--select-on hm_iou needs both heads; it is the "
                          "harmonic mean of sign and phrase IoU. Use "
                          "--select-on mean_mf1s with --levels " + levels)
     if mine.max_steps is None:
-        # YouTube is ~40x the data, so it gets a longer budget by default
-        mine.max_steps = 20000 if pretraining else 5000
+        # YouTube is ~40x the data, so it gets a longer budget by default.
+        # 40k rather than more: across three pretraining runs the selected
+        # checkpoint landed at 16k-23k steps every time, including in a 100k run,
+        # and always while the learning rate was still high — the back half of
+        # each run never improved the selection metric. See README.md.
+        mine.max_steps = 40000 if pretraining else 5000
 
     # Defaults describe the *basic baseline*: every optional trick off, so each
     # later experiment turns exactly one back on. This deliberately departs from
@@ -487,10 +506,17 @@ def main() -> None:
     # panels follow the *running best* model: redrawn only when `monitor`
     # improves, which is the same test ModelCheckpoint applies, so the figure in
     # W&B always belongs to the checkpoint on disk
+    callbacks = []
     if not args.no_wandb:
         from experiments.plot_callback import SegmentationPlotCallback
-        trainer_extra["callbacks"] = [SegmentationPlotCallback(
-            run_dir, val_names, monitor, phrase=mine.phrase)]
+        callbacks.append(SegmentationPlotCallback(run_dir, val_names, monitor,
+                                                  phrase=mine.phrase))
+    if mine.sample_schedule != "off":
+        from experiments.sample_schedule import SampleScheduleCallback
+        callbacks.append(SampleScheduleCallback(mine.max_steps,
+                                                shape=mine.sample_schedule))
+    if callbacks:
+        trainer_extra["callbacks"] = callbacks
 
     # train() takes monitor_metric, so both ModelCheckpoint and EarlyStopping
     # follow it without patching anything
@@ -791,6 +817,12 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"\n  phrase gold {mine.phrase}"
           f"\n  run/wandb   {run_name}  ->  project {args.wandb_project}"
           f"\n  levels      {args.levels}"
+          + (("\n  dev set     YouTube filtered by subtitle alignment"
+              if mine.dev_filter == "on" else
+              "\n  dev set     YouTube raw, unfiltered")
+             if "youtube_25" in args.val_datasets else "")
+          + (f"\n  sampling    {mine.sample_schedule} decay of noisy videos"
+             if mine.sample_schedule != "off" else "")
           + f"\n  validate on {args.val_datasets}  (first is in-domain, selects the checkpoint)"
           + f"\n  training    batch {args.batch_size}"
           + (f" x {mine.accumulate} accumulated = {args.batch_size * mine.accumulate}"
