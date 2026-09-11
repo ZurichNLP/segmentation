@@ -17,9 +17,12 @@
 #     sbatch experiments/pretrain_youtube.slurm                     # 2,20,1
 #     sbatch --job-name=02_pretrain_youtube_b100 \
 #            experiments/pretrain_youtube.slurm 2,100,1 _b100
+#     sbatch --job-name=02_pretrain_youtube_filtered \
+#            experiments/pretrain_youtube.slurm 2,80,1 _filtered linear
 #
-# Two positional arguments, both optional: the O,B,I class weights and a suffix
-# for the run name. The suffix is what keeps parallel runs apart — same day, same
+# Three positional arguments, all optional: the O,B,I class weights, a suffix
+# for the run name, and the sampling schedule (off, linear, cosine) that decays
+# the weight of videos whose subtitle timings fail DEV_FILTER. The suffix is what keeps parallel runs apart — same day, same
 # base name means the same `dist/<name>-<date>` directory, and Lightning would
 # write best-v1.ckpt into it beside the other run's checkpoint. The suffix also
 # separates the W&B run and the prediction JSON, which are both named from the
@@ -46,6 +49,7 @@ set -euo pipefail
 
 WEIGHTS="${1:-2,20,1}"     # O,B,I
 SUFFIX="${2:-}"            # appended to the run name, e.g. _b100
+SCHEDULE="${3:-off}"       # off | linear | cosine
 
 REPO=/home/zifjia/segmentation/segment-any-sign
 PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
@@ -53,7 +57,7 @@ PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
 mkdir -p /scratch/zifjia/segment-any-sign/slurm
 cd "$REPO"
 
-echo "weights    ${WEIGHTS}   run 02_pretrain_youtube${SUFFIX}"
+echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   run 02_pretrain_youtube${SUFFIX}"
 echo "node       $(hostname)"
 echo "job        ${SLURM_JOB_ID:-none}  cpus ${SLURM_CPUS_PER_TASK:-?}"
 echo "commit     $(git rev-parse --short HEAD)$(git diff --quiet || echo ' (dirty)')"
@@ -67,6 +71,8 @@ srun "$PYTHON" experiments/train.py \
     --levels phrase \
     --phrase glosses \
     --class-weights "${WEIGHTS}" \
+    --sample-schedule "${SCHEDULE}" \
+    --dev-filter on \
     --select-on mean_mf1s \
     --sampling frame \
     --velocity off \
