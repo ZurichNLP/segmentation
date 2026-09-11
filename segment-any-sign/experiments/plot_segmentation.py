@@ -446,10 +446,16 @@ def pose_frames(pose_path: str, fps: float, times):
     edges, offset = [], 0
     for component in pose.header.components:
         if component.name == "POSE_LANDMARKS":
-            # 11-24 is shoulders through hips: the face points (0-10) and the
-            # legs (25+) only add clutter to a thumbnail of someone signing
+            # 0-24 is head through hips. 0-10 are nose, eyes, ears and mouth, so
+            # dropping them leaves a headless torso; only the legs (25+) go,
+            # since `pose_hide_legs` zeroes them anyway and they would stretch
+            # the thumbnail vertically for no gain.
             edges += [(a + offset, b + offset) for a, b in component.limbs
-                      if 11 <= a <= 24 and 11 <= b <= 24]
+                      if a <= 24 and b <= 24]
+            # MediaPipe connects the face points to each other and the shoulders
+            # to each other, but never the two groups, so the head otherwise
+            # floats above the torso. Nose to each shoulder stands in for a neck.
+            edges += [(0 + offset, 11 + offset), (0 + offset, 12 + offset)]
         elif component.name in ("LEFT_HAND_LANDMARKS", "RIGHT_HAND_LANDMARKS"):
             edges += [(a + offset, b + offset) for a, b in component.limbs]
         offset += len(component.points)
@@ -584,8 +590,19 @@ def plot_detail(records, out_path: Path, dataset: str, level: str = "phrase",
         start, end = pick_window(record, level, frames)
         times = keyframe_times(start, end, per_second)
         video = video_path(record["id"])
-        shots.append(video_frames(video, times) if video
-                     else pose_frames(record["pose_path"], record["fps"], times))
+        frames_in = None
+        if video:
+            try:
+                frames_in = video_frames(video, times)
+            except Exception as error:
+                # a few of the downloads are truncated or otherwise unreadable;
+                # one bad file must not cost the whole figure
+                print(f"  {record['id']}: {type(error).__name__} reading the "
+                      f"video, falling back to a pose render")
+                video, frames_in = None, None
+        if frames_in is None:
+            frames_in = pose_frames(record["pose_path"], record["fps"], times)
+        shots.append(frames_in)
         windows.append((start, end, video))
 
     # The strip is sized to the frames themselves rather than to a fixed row
@@ -603,20 +620,26 @@ def plot_detail(records, out_path: Path, dataset: str, level: str = "phrase",
     ribbon = 1.5
     figure = plt.figure(figsize=(max(12.0, widest * inches_per_frame),
                                  sum(strips) + ribbon * len(records) + 1.0))
-    heights = [value for strip in strips for value in (strip, ribbon)]
-    grid = figure.add_gridspec(2 * len(records), 1, height_ratios=heights,
-                               hspace=0.55)
+    # Nested, because a flat gridspec spaces every gap alike. The strip and its
+    # ribbons are one object and sit close together; separate clips need air
+    # between them, or ten panels read as one wall.
+    outer = figure.add_gridspec(len(records), 1,
+                                height_ratios=[strip + ribbon for strip in strips],
+                                hspace=0.55)
+    grid = [outer[i].subgridspec(2, 1, height_ratios=[strips[i], ribbon],
+                                 hspace=0.08)
+            for i in range(len(records))]
 
     for index, record in enumerate(records):
         start, end, video = windows[index]
-        top = figure.add_subplot(grid[2 * index])
+        top = figure.add_subplot(grid[index][0])
         top.set_xlim(start, end)
         draw_keyframes(top, shots[index], start, end)
         top.set_title(f"{record['id']}   {start:.0f}–{end:.0f} s   "
                       f"({'video' if video else 'pose render'}, "
                       f"{len(shots[index])} keyframes)", fontsize=8, loc="left")
 
-        axis = figure.add_subplot(grid[2 * index + 1])
+        axis = figure.add_subplot(grid[index][1])
         for offset, (key, label, colour) in enumerate(rows):
             for a, b in record.get(key, {}).get(level, []):
                 if b <= start or a >= end:
