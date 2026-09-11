@@ -497,7 +497,11 @@ def main() -> None:
     train(monitor_metric=monitor)
 
     if mine.eval_split != "none":
-        evaluate_best_checkpoint(run_dir, phrase=mine.phrase, split=mine.eval_split)
+        evaluate_best_checkpoint(run_dir, phrase=mine.phrase,
+                                 split=mine.eval_split,
+                                 plot_datasets=args.val_datasets,
+                                 plot_device="cuda" if str(args.device) in
+                                 ("gpu", "cuda") else "cpu")
 
 
 def _with_workers(loader, workers: int | None):
@@ -911,7 +915,25 @@ def write_data_report(run_dir: Path, phrase: str) -> dict:
     return report
 
 
-def evaluate_best_checkpoint(run_dir: Path, phrase: str, split: str) -> None:
+def plot_references(root: Path, split: str) -> list:
+    """`--reference` arguments for whichever benchmark predictions exist.
+
+    The 2023 and shipped 2026 rows only exist for DGS, and only for a split
+    somebody has already run them on, so a missing file drops the row rather
+    than failing the plot.
+    """
+    out = []
+    for key, name in (("ref_2023", f"dgs_{split}_2023_E4s-1.json"),
+                      ("ref_2026", f"dgs_{split}_2026.json")):
+        path = root / "benchmark" / "predictions" / name
+        if path.exists():
+            out += ["--reference", f"{key}={path}"]
+    return out
+
+
+def evaluate_best_checkpoint(run_dir: Path, phrase: str, split: str,
+                             plot_datasets: str = "dgs_corpus",
+                             plot_device: str = "cpu") -> None:
     """Evaluate the best checkpoint, once, through the benchmark's own scripts.
 
     Shells out to `benchmark/predict_dgs_2026.py` and `score.py` rather than
@@ -950,6 +972,12 @@ def evaluate_best_checkpoint(run_dir: Path, phrase: str, split: str) -> None:
          "--split", split, "--model", str(checkpoint), "--phrase", phrase,
          "--label", run_id, "--out", str(predictions)],
         [sys.executable, str(here.parent / "benchmark" / "score.py"), str(predictions)],
+        # both views, ten clips each, beside the checkpoint. A table row says a
+        # model over-segments; the figures say where and against what.
+        [sys.executable, str(here / "plot_segmentation.py"),
+         "--run", run_dir.name, "--datasets", plot_datasets, "--clips", "20",
+         "--zoom-clips", "10", "--level", "phrase", "--device", plot_device,
+         "--phrase", phrase] + plot_references(here.parent, split),
     ]
 
     output = []

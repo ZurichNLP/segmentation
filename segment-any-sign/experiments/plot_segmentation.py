@@ -306,6 +306,10 @@ def main() -> None:
                         help="clips per dataset")
     parser.add_argument("--which", default="best", choices=["best", "last"])
     parser.add_argument("--level", default="phrase", choices=["phrase", "sign"])
+    parser.add_argument("--phrase", default="glosses",
+                        choices=["glosses", "sentence"],
+                        help="which DGS phrase definition the gold uses; ignored "
+                             "for YouTube, whose phrase is the subtitle cue")
     parser.add_argument("--seconds", type=float, default=120.0)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--reference", action="append", default=[],
@@ -343,7 +347,8 @@ def main() -> None:
                 print(f"ignoring stale cache {cache} (pre-seconds format)")
         if records is None:
             checkpoint = newest_checkpoint(run_dir, args.which)
-            records = collect(checkpoint, dataset, args.clips, args.device)
+            records = collect(checkpoint, dataset, args.clips, args.device,
+                              phrase=args.phrase)
             cache.write_text(json.dumps(records))
 
         for spec in args.reference:

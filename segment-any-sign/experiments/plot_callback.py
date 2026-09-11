@@ -36,13 +36,17 @@ class SegmentationPlotCallback(pl.Callback):
     """Redraw and log the panels each time `monitor` reaches a new best."""
 
     def __init__(self, run_dir: Path, datasets, monitor: str,
-                 phrase: str = "sentence", clips: int = 20, root: Path = None):
+                 phrase: str = "sentence", clips: int = 20, root: Path = None,
+                 zoom_clips: int = 3):
         self.run_dir = Path(run_dir)
         self.datasets = [name for name in datasets if name]
         self.monitor = monitor
         self.phrase = phrase
         self.clips = clips
         self.root = Path(root or Path(__file__).resolve().parents[1])
+        #: clips in the keyframe view. Fewer than the offline figure: this runs
+        #: on every improvement, and each panel decodes a frame per second.
+        self.zoom_clips = zoom_clips
         self.best = None
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:
@@ -65,7 +69,8 @@ class SegmentationPlotCallback(pl.Callback):
             import wandb
 
             from experiments.plot_segmentation import (add_reference, collect,
-                                                       plot_clips)
+                                                       plot_clips, plot_detail,
+                                                       video_path)
 
             # the trainer's own W&B run, not the global `wandb.run`: they are
             # normally the same object, but taking it from the logger means the
@@ -97,11 +102,21 @@ class SegmentationPlotCallback(pl.Callback):
                     # same naming as the offline CLI: the view is identified by
                     # the window it covers, so the 120 s overview and a
                     # frame-count detail never overwrite each other
+                    stem = f"{self.run_dir.name} — {dataset} dev (phrase), " \
+                           f"step {step}, {self.monitor} {value:.4f}"
                     out = self.run_dir / f"segments_{dataset}_phrase_120s.png"
-                    plot_clips(records, out, level="phrase",
-                               title=f"{self.run_dir.name} — {dataset} dev (phrase), "
-                                     f"step {step}, {self.monitor} {value:.4f}")
-                    images[f"segments/{dataset}"] = wandb.Image(str(out))
+                    plot_clips(records, out, level="phrase", title=stem)
+                    images[f"segments/{dataset}_120s"] = wandb.Image(str(out))
+
+                    if self.zoom_clips:
+                        # video-backed clips first, so a panel shows real frames
+                        # rather than a skeleton wherever that is possible
+                        chosen = sorted(records,
+                                        key=lambda r: video_path(r["id"]) is None)
+                        detail = self.run_dir / f"segments_{dataset}_phrase_1024f.png"
+                        plot_detail(chosen[:self.zoom_clips], detail, dataset,
+                                    level="phrase", title=stem)
+                        images[f"segments/{dataset}_1024f"] = wandb.Image(str(detail))
             finally:
                 if was_training:
                     pl_module.train()
