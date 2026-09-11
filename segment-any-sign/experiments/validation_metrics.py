@@ -119,7 +119,17 @@ class ValidationMetricsModel(PoseTaggingModel):
                     continue
                 weight = torch.tensor(self.class_weights[level], dtype=torch.float)
                 # NLLLoss is a Module, so Lightning moves the weight with the model
-                setattr(self, attr, nn.NLLLoss(reduction="none", weight=weight))
+                loss_fn = nn.NLLLoss(reduction="none", weight=weight)
+                # ...but `_WeightedLoss` registers that weight as a *persistent*
+                # buffer, so it lands in every checkpoint under a key plain
+                # `PoseTaggingModel` has never heard of, and a strict load fails:
+                # "Unexpected key(s) in state_dict: phrase_loss_fn.weight". The
+                # weight is a property of the loss, not of the trained model, and
+                # `__init__` rebuilds it from `class_weights` on any resume — so
+                # re-register it non-persistently and keep it out of the file.
+                del loss_fn.weight
+                loss_fn.register_buffer("weight", weight, persistent=False)
+                setattr(self, attr, loss_fn)
 
     #: compute train metrics every N steps. 9 ~= once per epoch at batch 64 over
     #: 586 clips; 1 would roughly double training cost.

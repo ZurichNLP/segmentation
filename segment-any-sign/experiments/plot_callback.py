@@ -94,7 +94,10 @@ class SegmentationPlotCallback(pl.Callback):
                         full = self.root / path
                         if full.exists():
                             add_reference(records, full, key)
-                    out = self.run_dir / f"segments_{dataset}_phrase.png"
+                    # same naming as the offline CLI: the view is identified by
+                    # the window it covers, so the 120 s overview and a
+                    # frame-count detail never overwrite each other
+                    out = self.run_dir / f"segments_{dataset}_phrase_120s.png"
                     plot_clips(records, out, level="phrase",
                                title=f"{self.run_dir.name} — {dataset} dev (phrase), "
                                      f"step {step}, {self.monitor} {value:.4f}")

@@ -48,6 +48,13 @@ CAPTION = {
 FOOTER = ("White hairlines separate touching segments. One panel per clip, "
           "first two minutes only.")
 
+DETAIL_CAPTION = (
+    "Keyframes are sampled uniformly, at least one per second, from the video "
+    "where one exists and from a pose render otherwise, and run edge to edge in "
+    "time order. Text above a span is the subtitle line overlapping it, thinned "
+    "so a dense window stays readable. The window is the one holding the most "
+    "gold spans, not the first.")
+
 
 def newest_checkpoint(run_dir: Path, which: str = "best") -> Path:
     """Newest matching checkpoint. Two runs sharing a directory produce
@@ -59,35 +66,9 @@ def newest_checkpoint(run_dir: Path, which: str = "best") -> Path:
     return found[-1]
 
 
-def load_checkpoint(checkpoint: Path, device: str = "cpu"):
-    """Load a checkpoint that our training wrote.
-
-    `ValidationMetricsModel` keeps the class-frequency weights as buffers on its
-    loss functions, so its checkpoints carry `sign_loss_fn.weight` and
-    `phrase_loss_fn.weight` that plain `PoseTaggingModel` has never heard of.
-    They matter to training and not at all to a forward pass, so they are dropped
-    — but only those two. Any other unexpected key is still an error, because a
-    silently half-loaded model would produce plausible nonsense.
-    """
-    import torch
-
-    from sign_language_segmentation.model.model import PoseTaggingModel
-
-    state = torch.load(checkpoint, map_location=device, weights_only=False)
-    dropped = {key for key in state["state_dict"]
-               if key in ("sign_loss_fn.weight", "phrase_loss_fn.weight")}
-    for key in dropped:
-        state["state_dict"].pop(key)
-    patched = checkpoint.parent / f".{checkpoint.stem}.plot.ckpt"
-    torch.save(state, patched)
-    try:
-        model = PoseTaggingModel.load_from_checkpoint(
-            checkpoint_path=str(patched), map_location=device)
-    finally:
-        patched.unlink(missing_ok=True)
-    if dropped:
-        print(f"dropped training-only keys: {', '.join(sorted(dropped))}")
-    return model.to(device).eval()
+# one loader for every evaluation path, so a checkpoint that scores in the
+# benchmark also plots here — see benchmark/predict_dgs_2026.py
+from benchmark.predict_dgs_2026 import load_checkpoint  # noqa: E402,F401
 
 
 def _segments(bio, b_id: int, i_id: int, split_on_b: bool = True):
@@ -278,6 +259,9 @@ def collect(model: "Path | object", dataset: str, clips: int, device: str,
 
         fps = spec["fps"]
         record = {"id": spec["id"], "fps": fps, "frames": total, "units": "seconds",
+                  # kept for the detail view, which renders a skeleton when the
+                  # clip has no video
+                  "pose_path": str(spec["pose_path"]),
                   "gold": {}, "pred": {}, "pred_upstream": {}}
         for upstream, ours in LEVELS.items():
             gold_ms = [{"start": s["start_time"] * 1000, "end": s["end_time"] * 1000}
@@ -330,6 +314,10 @@ def main() -> None:
                              "row; repeatable, e.g. "
                              "--reference ref_2023=benchmark/predictions/"
                              "dgs_validation_2023_E4s-1.json")
+    parser.add_argument("--frames", type=int, default=1024,
+                        help="window length of the detail view, in frames")
+    parser.add_argument("--zoom-clips", type=int, default=4,
+                        help="clips to draw in the detail view (0 = skip it)")
     parser.add_argument("--reuse", action="store_true",
                         help="replot from the cached predictions beside the figure")
     args = parser.parse_args()
@@ -338,11 +326,13 @@ def main() -> None:
 
     run_dir = DIST / args.run
     for dataset in [name.strip() for name in args.datasets.split(",") if name.strip()]:
-        out = run_dir / f"segments_{dataset}_{args.level}.png"
+        # named by what each view fixes: the overview spans a wall-clock window,
+        # the detail a fixed number of frames, whose duration depends on the fps
+        overview = run_dir / f"segments_{dataset}_{args.level}_{args.seconds:.0f}s.png"
         # inference over whole videos is minutes on CPU; restyling the figure
         # should not pay that again. `units` guards against an older cache that
         # stored frames instead of seconds.
-        cache = out.with_suffix(".json")
+        cache = overview.with_suffix(".json")
         records = None
         if args.reuse and cache.exists():
             cached = json.loads(cache.read_text())
@@ -360,15 +350,319 @@ def main() -> None:
             key, _, path = spec.partition("=")
             if not path:
                 raise SystemExit(f"--reference wants ROW=PATH, got {spec!r}")
-            if key not in dict((row[0], row) for row in ROWS):
+            if key not in {row[0] for row in ROWS}:
                 raise SystemExit(f"unknown row {key!r}; "
                                  f"pick from {[row[0] for row in ROWS]}")
             add_reference(records, Path(path), key)
-        plot_clips(records, out, level=args.level,
+
+        plot_clips(records, overview, level=args.level,
                    title=f"{args.run} / {args.which} — {dataset} dev ({args.level})",
                    seconds=args.seconds)
-        print(f"wrote {out}\n")
+        print(f"wrote {overview}")
 
+        if args.zoom_clips:
+            detail = run_dir / f"segments_{dataset}_{args.level}_{args.frames}f.png"
+            # real frames beat a skeleton, so clips that have an mp4 go first and
+            # a pose render only appears when there are not enough of them. DGS
+            # has no video at all, so every DGS panel is a render.
+            chosen = sorted(records, key=lambda r: video_path(r["id"]) is None)
+            plot_detail(chosen[:args.zoom_clips], detail, dataset,
+                        level=args.level, frames=args.frames,
+                        title=f"{args.run} / {args.which} — {dataset} dev "
+                              f"({args.level}), {args.frames}-frame detail")
+            print(f"wrote {detail}\n")
+
+
+
+
+# --- detail view: keyframes + subtitle text over one 1024-frame window --------
+#
+# Styled after Figure 1 of Segment, Embed and Align (arXiv 2512.08094): a strip
+# of keyframes sampled at the midpoint of each gold span, over the ribbon
+# tracks. Theirs compares subtitle timings to signing; ours compares predicted
+# segmentation to gold, so the tracks differ but the reading does not.
+
+#: YouTube mp4s live in a second copy of the corpus, split by whether the video
+#: is ASL. The VGG copy we train from carries poses and subtitles only.
+VIDEO_ROOTS = ("/shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_Colin_Leong/"
+               "ase/downloads",
+               "/shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_Colin_Leong/"
+               "non-ase/downloads")
+
+
+def video_path(clip_id: str):
+    """The mp4 for a clip, or None. About 85% of YouTube dev clips have one; the
+    Public DGS Corpus archive holds no video at all, only `.pose` and `.eaf`."""
+    import os
+
+    for root in VIDEO_ROOTS:
+        candidate = os.path.join(root, clip_id, f"{clip_id}.mp4")
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def video_frames(path: str, times):
+    """Decode one RGB frame per requested timestamp, seeking rather than scanning."""
+    import av
+
+    out = []
+    container = av.open(path)
+    stream = container.streams.video[0]
+    try:
+        for want in times:
+            container.seek(int(want / stream.time_base), stream=stream)
+            for frame in container.decode(stream):
+                if float(frame.pts * stream.time_base) >= want - 0.5:
+                    out.append(frame.to_ndarray(format="rgb24"))
+                    break
+            else:
+                out.append(None)
+    finally:
+        container.close()
+    return out
+
+
+def pose_frames(pose_path: str, fps: float, times):
+    """Skeleton renders, for clips with no video — every DGS clip, and the ~15%
+    of YouTube dev clips whose mp4 is missing.
+
+    The whole window is read once and indexed, not reopened per keyframe: at one
+    frame per second that is forty-odd reads of an 85 MB file over the share.
+
+    Body and hands only. These files also carry POSE_WORLD_LANDMARKS, metric
+    coordinates centred on the hips that share nothing with the image frame; drawn
+    alongside the rest it appears as a second body floating beside the signer.
+    """
+    import numpy as np
+    from pose_format import Pose
+
+    wanted = [max(0, int(round(t * fps))) for t in times]
+    first, last = min(wanted), max(wanted)
+    with open(pose_path, "rb") as handle:
+        pose = Pose.read(handle, start_frame=first, end_frame=last + 1)
+    block = np.ma.filled(pose.body.data, np.nan)[:, 0]
+
+    edges, offset = [], 0
+    for component in pose.header.components:
+        if component.name == "POSE_LANDMARKS":
+            # 11-24 is shoulders through hips: the face points (0-10) and the
+            # legs (25+) only add clutter to a thumbnail of someone signing
+            edges += [(a + offset, b + offset) for a, b in component.limbs
+                      if 11 <= a <= 24 and 11 <= b <= 24]
+        elif component.name in ("LEFT_HAND_LANDMARKS", "RIGHT_HAND_LANDMARKS"):
+            edges += [(a + offset, b + offset) for a, b in component.limbs]
+        offset += len(component.points)
+
+    return [(block[min(index - first, len(block) - 1)][:, :2], edges)
+            for index in wanted]
+
+
+def keyframe_times(start: float, end: float, per_second: float = 1.0) -> list:
+    """Uniform sample times, at least `per_second` of them per second of window.
+
+    Uniform rather than at each gold span's midpoint: span midpoints cluster
+    where the spans do, leaving gaps exactly where the model is disagreeing with
+    the gold, which is the part worth looking at.
+    """
+    count = max(2, int(round((end - start) * per_second)))
+    step = (end - start) / count
+    return [start + (i + 0.5) * step for i in range(count)]
+
+
+def draw_keyframes(axis, items, start: float, end: float) -> None:
+    """Lay the keyframes edge to edge across the window, in time order.
+
+    Each sits in its own inset rather than being drawn with a data extent,
+    because an extent stretches the image to the box: a 640x360 frame across four
+    seconds comes out badly distorted. An inset has a fixed shape in figure
+    space, so `aspect="equal"` letterboxes and the signer keeps their proportions.
+    """
+    import numpy as np
+
+    count = max(len(items), 1)
+    width = 1.0 / count
+    for position, item in enumerate(items):
+        if item is None:
+            continue
+        inset = axis.inset_axes([position * width, 0.0, width, 1.0])
+        inset.set_xticks([]); inset.set_yticks([])
+        for spine in inset.spines.values():
+            spine.set_color("#e2e8f0"); spine.set_linewidth(0.4)
+        if isinstance(item, tuple):
+            points, edges = item
+            good = ~np.isnan(points).any(axis=1)
+            drawn = {i for edge in edges for i in edge}
+            if good.any() and drawn:
+                x, y = points[:, 0], -points[:, 1]
+                for a, b in edges:
+                    if good[a] and good[b]:
+                        inset.plot([x[a], x[b]], [y[a], y[b]], color="#2d3748",
+                                   linewidth=0.7, solid_capstyle="round")
+                shown = [i for i in drawn if good[i]]
+                if shown:
+                    inset.set_xlim(min(x[shown]) - 12, max(x[shown]) + 12)
+                    inset.set_ylim(min(y[shown]) - 12, max(y[shown]) + 12)
+                inset.set_aspect("equal")
+        else:
+            inset.imshow(item, aspect="equal")
+
+    axis.set_ylim(0, 1)
+    axis.set_xticks([]); axis.set_yticks([])
+    for spine in axis.spines.values():
+        spine.set_visible(False)
+
+
+def cue_texts(dataset: str, clip_id: str) -> list:
+    """Subtitle text with timings, for labelling gold spans.
+
+    YouTube only. `datasets/youtube_sl25/load.py` deliberately drops the text
+    when caching cues — the model never sees it — so it is re-parsed here, for
+    one clip at a time, purely for the figure. The DGS loader carries no
+    German text at all, so its spans go unlabelled.
+    """
+    if dataset != "youtube_25":
+        return []
+    import re
+
+    from datasets.youtube_sl25 import load as yt
+
+    path = yt.video_index().get(clip_id, {}).get("subtitle")
+    if not path:
+        return []
+    out = []
+    for block in Path(path).read_text(errors="ignore").split("\n\n"):
+        match = yt._TIMESTAMP.search(block)
+        if not match:
+            continue
+        body = block[match.end():].strip()
+        if not body or re.match(r"^\s*[\[(♪]", body):
+            continue
+        out.append((yt._seconds(*match.groups()[:4]),
+                    yt._seconds(*match.groups()[4:]),
+                    " ".join(body.split())))
+    return out
+
+
+def pick_window(record, level: str, frames: int) -> tuple:
+    """The `frames`-long window holding the most gold spans, in seconds.
+
+    A window chosen by position usually lands on silence; one chosen by density
+    shows the case the figure is meant to show — several boundaries close
+    together, which is where segmentation is actually hard.
+    """
+    fps = record["fps"]
+    length = frames / fps
+    spans = record["gold"][level]
+    if not spans:
+        return 0.0, length
+    best, count = spans[0][0], 0
+    for start, _ in spans:
+        inside = sum(1 for a, b in spans if a >= start and b <= start + length)
+        if inside > count:
+            best, count = start, inside
+    return best, best + length
+
+
+def plot_detail(records, out_path: Path, dataset: str, level: str = "phrase",
+                frames: int = 1024, title: str = "", max_texts: int = 6,
+                per_second: float = 1.0, inches_per_frame: float = 1.0):
+    """One panel per clip: a keyframe strip above, ribbons below, text on gold.
+
+    The canvas widens with the number of keyframes rather than the other way
+    around, so a keyframe is always about `inches_per_frame` wide however long
+    the window is. At one frame per second a 1024-frame window is 41 s on
+    YouTube and 20 s on DGS, so the DGS figures come out half as wide.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rows = [row for row in ROWS if any(row[0] in record for record in records)]
+    shots, windows = [], []
+    for record in records:
+        start, end = pick_window(record, level, frames)
+        times = keyframe_times(start, end, per_second)
+        video = video_path(record["id"])
+        shots.append(video_frames(video, times) if video
+                     else pose_frames(record["pose_path"], record["fps"], times))
+        windows.append((start, end, video))
+
+    # The strip is sized to the frames themselves rather than to a fixed row
+    # height: `aspect="equal"` letterboxes inside its box, so any spare height is
+    # white space above and below the signer. One aspect per panel, since a panel
+    # is one clip.
+    def shape(items):
+        for item in items:
+            if item is not None and not isinstance(item, tuple):
+                return item.shape[0] / item.shape[1]
+        return 1.15                       # skeletons are drawn roughly portrait
+
+    widest = max(len(shot) for shot in shots)
+    strips = [inches_per_frame * shape(shot) for shot in shots]
+    ribbon = 1.5
+    figure = plt.figure(figsize=(max(12.0, widest * inches_per_frame),
+                                 sum(strips) + ribbon * len(records) + 1.0))
+    heights = [value for strip in strips for value in (strip, ribbon)]
+    grid = figure.add_gridspec(2 * len(records), 1, height_ratios=heights,
+                               hspace=0.55)
+
+    for index, record in enumerate(records):
+        start, end, video = windows[index]
+        top = figure.add_subplot(grid[2 * index])
+        top.set_xlim(start, end)
+        draw_keyframes(top, shots[index], start, end)
+        top.set_title(f"{record['id']}   {start:.0f}–{end:.0f} s   "
+                      f"({'video' if video else 'pose render'}, "
+                      f"{len(shots[index])} keyframes)", fontsize=8, loc="left")
+
+        axis = figure.add_subplot(grid[2 * index + 1])
+        for offset, (key, label, colour) in enumerate(rows):
+            for a, b in record.get(key, {}).get(level, []):
+                if b <= start or a >= end:
+                    continue
+                axis.barh(-offset, min(b, end) - max(a, start), left=max(a, start),
+                          height=0.62, color=colour, edgecolor="white",
+                          linewidth=0.5)
+        spans = [(a, b) for a, b in record["gold"][level] if b > start and a < end]
+        # two heights, alternating: neighbouring subtitle lines are long and
+        # would otherwise print on top of each other
+        for position, ((a, b), text) in enumerate(
+                zip(spans, span_texts(dataset, record["id"], spans, max_texts))):
+            if text:
+                axis.text((a + b) / 2, 0.5 + 0.85 * (position % 2), text,
+                          fontsize=6, ha="center", va="bottom", color="#4a5568")
+        axis.set_ylim(-len(rows) - 0.6, 2.6)
+        axis.set_yticks([-i for i in range(len(rows))])
+        axis.set_yticklabels([row[1] for row in rows], fontsize=7)
+        axis.set_xlim(start, end)
+        axis.set_xlabel("seconds", fontsize=7)
+        axis.tick_params(labelsize=6, labelbottom=True)
+        for spine in ("top", "right", "left"):
+            axis.spines[spine].set_visible(False)
+
+    figure.suptitle(title or f"{dataset} — {frames}-frame detail", fontsize=10)
+    figure.text(0.5, 0.004, DETAIL_CAPTION, ha="center", va="bottom",
+                fontsize=7, color="#4a5568")
+    figure.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.close(figure)
+    return out_path
+
+
+def span_texts(dataset: str, clip_id: str, spans, limit: int) -> list:
+    """The subtitle line overlapping each gold span, truncated, thinned to
+    `limit` labels so a dense window stays readable."""
+    cues = cue_texts(dataset, clip_id)
+    step = max(1, len(spans) // max(limit, 1))
+    out = []
+    for position, (a, b) in enumerate(spans):
+        if position % step or not cues:
+            out.append("")
+            continue
+        hit = max(cues, key=lambda c: min(b, c[1]) - max(a, c[0]), default=None)
+        text = hit[2] if hit and min(b, hit[1]) > max(a, hit[0]) else ""
+        out.append(text[:38] + ("…" if len(text) > 38 else ""))
+    return out
 
 if __name__ == "__main__":
     main()

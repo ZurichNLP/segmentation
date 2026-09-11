@@ -135,9 +135,16 @@ For scale: DGS train is 91 hours and 61k phrases, so this is **~40x the hours** 
 
 ### Runs
 
-| # | run | change | phrase F1-ma | phrase IoU | phrase % | phrase mF1S |
-|---|---|---|---|---|---|---|
-| — | Seq2Seq + attention (ACL SRW 2025)\* | reference | 0.60 | 0.62 | 0.95 | — |
-| | | _(nothing yet)_ | | | | |
+All phrase level, all dev. **In domain** is the 167-video language-balanced YouTube-SL-25 dev set; **out of domain** is DGS validation, which these models never train on.
+
+| | | | | In domain (YouTube) | | | | Out of domain (DGS) | | | |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **#** | **run** | **change** | **step** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** |
+| — | Seq2Seq + attention (ACL SRW 2025)\* | reference | — | 0.60 | 0.62 | 0.95 | — | — | — | — | — |
+| 1 | `02_pretrain_youtube-2026.09.09` | DGS-measured inverse weights (O 1.8, B 269, I 2.3), 100k steps | 16,426 | 0.469 | 0.868 | 2.016 | 0.267 | 0.224 | 0.578 | 4.860 | 0.207 |
+| 2 | `02_pretrain_youtube-2026.09.10` | weights 2,20,1, 50k steps | 23,237 | 0.531 | 0.433 | 0.300 | 0.138 | 0.255 | 0.280 | 0.020 | 0.000 |
+| 3 | `02_pretrain_youtube_b80-2026.09.10` | weights 2,80,1, 50k steps — **still running** | 17,628 | 0.514 | 0.845 | 1.260 | 0.339 | 0.301 | 0.587 | 0.683 | 0.206 |
+
+`step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at. Row 3 is the best so far of a run at 48,880 of 50,000 and may still move. `%` is best nearest **1**. YouTube numbers come from the training-time validation metrics at that checkpoint; DGS numbers from `benchmark/score.py` on written predictions, the protocol the benchmark uses. Both call the same [`../metrics/`](../metrics/) code and agree on DGS F1-ma and IoU to three decimals, differing on `%` and mF1S because one averages per clip and the other aggregates over the corpus.
 
 \* Their best YouTube-ASL row, Table 3 ([notes](../literature/2025-temporal-boundary-identification/)), scored on **their** YouTube-ASL split, not ours: ASL alone against our 56 languages, ResNet-101 over RGB and optical flow against MediaPipe pose, and their own decoding. Not a like-for-like score, but the only published point on subtitle-supervised YouTube segmentation.

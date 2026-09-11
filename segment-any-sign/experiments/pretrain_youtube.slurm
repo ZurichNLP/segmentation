@@ -14,7 +14,16 @@
 #
 # Stage one: subtitle-supervised phrase pretraining on YouTube-SL-25.
 #
-#     sbatch experiments/pretrain_youtube.slurm
+#     sbatch experiments/pretrain_youtube.slurm                     # 2,20,1
+#     sbatch --job-name=02_pretrain_youtube_b100 \
+#            experiments/pretrain_youtube.slurm 2,100,1 _b100
+#
+# Two positional arguments, both optional: the O,B,I class weights and a suffix
+# for the run name. The suffix is what keeps parallel runs apart — same day, same
+# base name means the same `dist/<name>-<date>` directory, and Lightning would
+# write best-v1.ckpt into it beside the other run's checkpoint. The suffix also
+# separates the W&B run and the prediction JSON, which are both named from the
+# run id. Pass --job-name to sbatch to keep the SLURM logs apart as well.
 #
 # Every flag below is spelled out even where it is the default, so an upstream
 # change cannot move a hyperparameter silently. See experiments/README.md.
@@ -35,12 +44,16 @@
 
 set -euo pipefail
 
+WEIGHTS="${1:-2,20,1}"     # O,B,I
+SUFFIX="${2:-}"            # appended to the run name, e.g. _b100
+
 REPO=/home/zifjia/segmentation/segment-any-sign
 PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
 
 mkdir -p /scratch/zifjia/segment-any-sign/slurm
 cd "$REPO"
 
+echo "weights    ${WEIGHTS}   run 02_pretrain_youtube${SUFFIX}"
 echo "node       $(hostname)"
 echo "job        ${SLURM_JOB_ID:-none}  cpus ${SLURM_CPUS_PER_TASK:-?}"
 echo "commit     $(git rev-parse --short HEAD)$(git diff --quiet || echo ' (dirty)')"
@@ -48,12 +61,12 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 echo
 
 srun "$PYTHON" experiments/train.py \
-    --run_name 02_pretrain_youtube \
+    --run_name "02_pretrain_youtube${SUFFIX}" \
     --datasets youtube_25 \
     --val-datasets youtube_25,dgs_corpus \
     --levels phrase \
     --phrase glosses \
-    --class-weights 2,20,1 \
+    --class-weights "${WEIGHTS}" \
     --select-on mean_mf1s \
     --sampling frame \
     --velocity off \

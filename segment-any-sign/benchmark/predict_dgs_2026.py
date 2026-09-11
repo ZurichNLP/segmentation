@@ -89,6 +89,51 @@ BIO_2026 = {"UNK": 0, "O": 1, "B": 2, "I": 3}
 LEVELS = {"sign": "sign", "sentence": "phrase"}  # their name -> ours
 
 
+#: Class weights that `ValidationMetricsModel` used to register as *persistent*
+#: buffers, so they sit in every checkpoint written before 2026-09-11 under keys
+#: plain `PoseTaggingModel` has never heard of. Training-only either way: the
+#: weight belongs to the loss, not to the trained model.
+TRAINING_ONLY_KEYS = ("sign_loss_fn.weight", "phrase_loss_fn.weight")
+
+
+def load_checkpoint(model_path: str, device: str = "cpu"):
+    """Load a model for evaluation, tolerating those legacy keys.
+
+    Anything that is not a `.ckpt` — the shipped safetensors directory — goes
+    straight to upstream's loader. For a checkpoint of ours the two keys above
+    are dropped and everything else is loaded **strictly**: a half-loaded model
+    produces plausible nonsense rather than an error, so only the keys we can
+    name are forgiven.
+    """
+    import torch
+
+    from sign_language_segmentation.bin import _load_model_uncached
+    from sign_language_segmentation.model.model import PoseTaggingModel
+
+    path = Path(model_path)
+    if path.suffix != ".ckpt":
+        return _load_model_uncached(model_dir=str(path), device=device)
+
+    state = torch.load(path, map_location=device, weights_only=False)
+    dropped = [key for key in TRAINING_ONLY_KEYS if key in state["state_dict"]]
+    for key in dropped:
+        state["state_dict"].pop(key)
+    if not dropped:
+        return _load_model_uncached(model_dir=str(path), device=device)
+
+    # load_from_checkpoint only takes a path, so the trimmed state goes via a
+    # sibling file that is removed whether or not the load succeeds
+    patched = path.parent / f".{path.stem}.load.ckpt"
+    torch.save(state, patched)
+    try:
+        model = PoseTaggingModel.load_from_checkpoint(checkpoint_path=str(patched),
+                                                      map_location=device)
+    finally:
+        patched.unlink(missing_ok=True)
+    print(f"dropped training-only keys: {', '.join(dropped)}")
+    return model.to(device).eval()
+
+
 def rle(values) -> list[list[int]]:
     """Run-length encode frame labels, so they fit in the JSON."""
     out: list[list[int]] = []
@@ -226,7 +271,7 @@ def main() -> None:
     args = parser.parse_args()
 
     import torch
-    from sign_language_segmentation.bin import _load_model_uncached, resolve_model_path
+    from sign_language_segmentation.bin import resolve_model_path
     from sign_language_segmentation.metrics import (bio_labels_to_segments,
                                                     likeliest_probs_to_segments)
     from sign_language_segmentation.utils.bio import create_bio_from_times
@@ -238,7 +283,7 @@ def main() -> None:
     # segments and caps phrase % at 0.25 on this split.
     if args.decode is None:
         args.decode = "upstream" if args.model is None else "2023"
-    model = _load_model_uncached(model_dir=model_path, device=args.device)
+    model = load_checkpoint(model_path, device=args.device)
     num_frames = getattr(model.hparams, "num_frames", None)
     # (joints, dims); dims is 6 with velocity appended, 3 without
     pose_dims = tuple(getattr(model.hparams, "pose_dims", (50, 6)))
