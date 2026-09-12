@@ -408,7 +408,10 @@ def keep_ids(ids, rule: dict = None, workers: int = 32) -> set:
     first call happens *inside training startup*, so it warns rather than
     stalling silently.
     """
-    missing = sum(1 for vid in ids if vid not in measure_quality([]))
+    # read the cache once, not once per id: it is a 3.7 MB JSON, and calling
+    # this inside the loop hung a run for 26 h before anyone noticed
+    cached = measure_quality([])
+    missing = sum(1 for vid in ids if vid not in cached)
     if missing > 500:
         print(f"  {missing:,} videos have no alignment measure yet; this runs "
               f"once and caches, but it is not quick — see measure_quality")
