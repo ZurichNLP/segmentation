@@ -135,7 +135,7 @@ For scale: DGS train is 91 hours and 61k phrases, so this is **~40x the hours** 
 
 ### Runs
 
-All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twice: *filtered* is the 82 videos over 46 sign languages whose subtitle timings survive `DEV_FILTER`, and is the set runs now select on; *raw* is all 167, which is what every run before 2026-09-11 selected on. **Out of domain** is DGS validation, which these models never train on.
+All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twice: *filtered* is the 82 videos over 46 sign languages whose subtitle timings survive `DEV_FILTER`, reported for information; *raw* is all 167, and is the set runs select on — every run except run 4, which selected on filtered. Both sets are scored automatically after training, and a finished run appends its own row via [`add_result_row.py`](add_result_row.py), with `--note` as the `change` column. **Out of domain** is DGS validation, which these models never train on.
 
 | | | | | Filtered YouTube dev | | | | Raw YouTube dev | | | | Out of domain (DGS) | | | |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -144,12 +144,17 @@ All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twi
 | 1 | `02_pretrain_youtube-2026.09.09` | DGS-measured inverse weights (O 1.8, B 269, I 2.3), 100k steps | 16,426 | 0.496 | 0.869 | 2.041 | 0.292 | 0.469 | 0.868 | 2.021 | 0.267 | 0.224 | 0.578 | 4.860 | 0.207 |
 | 2 | `02_pretrain_youtube-2026.09.10` | weights 2,20,1, 50k steps | 23,237 | 0.551 | 0.468 | 0.319 | 0.163 | 0.531 | 0.434 | 0.296 | 0.137 | 0.255 | 0.280 | 0.020 | 0.000 |
 | 3 | `02_pretrain_youtube_b80-2026.09.10` | weights 2,80,1, 50k steps | 17,628 | 0.534 | 0.852 | 1.363 | 0.367 | 0.514 | 0.845 | 1.255 | 0.338 | 0.301 | 0.587 | 0.683 | 0.206 |
+| 4 | `02_pretrain_youtube_filtered-2026.09.12` | as 3, plus `--sample-schedule linear` (noisy videos 1.00 → 0.25), 40k steps, selected on filtered dev | 8,013 | 0.527 | 0.851 | 1.243 | 0.374 | 0.506 | 0.840 | 1.186 | 0.333 | 0.321 | 0.591 | 0.544 | 0.130 |
 
-`step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run here selected between 16k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
+`step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — runs 1–3 selected between 16k and 23k and run 4 at 8k, so the back half of each bought nothing. `%` is best nearest **1**.
 
-**Filtering the dev set moves every number up and changes no ranking**: frame F1 by about 0.02 and mF1S by about 0.03, uniformly across all three runs, which is what scoring against labels that are less wrong should do. It is a cleaner ruler, not a different one.
+**Filtering the dev set moves every number up**: frame F1 by about 0.02 and mF1S by 0.025–0.041 across all four runs, which is what scoring against labels that are less wrong should do. It keeps the ranking of runs 1–3; runs 3 and 4 swap on mF1S (filtered 0.367 vs 0.374, raw 0.338 vs 0.333), a gap inside the selection asymmetry described below.
 
 Both YouTube columns come from [`eval_youtube.py`](eval_youtube.py) on the written checkpoint, and DGS from `benchmark/score.py` on written predictions; all three call the same [`../metrics/`](../metrics/) code and the same decoder. The scorer reproduces the training-time numbers for run 3 to three decimals, which is the check that matters since the two paths share no code above `metrics/`.
+
+**The two YouTube columns are the same sets for every row.** Raw is the 167 hash-selected held-out videos; filtered is the 82 of those passing `DEV_FILTER`, a strict subset; neither overlaps the 38,578 training videos, identical across all four runs. Run 4 was scored after the quality cache grew to the whole training corpus, so run 3 was re-scored alongside it and reproduced its row exactly — the sets, scorer and decoder had not moved. One asymmetry remains that re-scoring cannot remove: runs 1–3 *selected* their checkpoint on raw dev and run 4 on filtered, so each is slightly favoured in the column it selected on. Differences of ±0.01 between rows 3 and 4 are inside that.
+
+**The sampling schedule (4 vs 3) is a wash in domain**: mF1S +0.007 filtered and −0.005 raw, frame F1 −0.007, `%` nearer 1 (1.24 against 1.36). Out of domain it gains frame F1 but drops DGS mF1S from 0.206 to 0.130, with `%` falling to 0.54 — it under-segments DGS. The 40k against 50k OneCycle length is a second difference between the two runs.
 
 Each run writes two figures per validation set beside its checkpoints, and logs them to W&B: `segments_<set>_phrase_120s.png` is two minutes of ribbons, `segments_<set>_phrase_1024f.png` one 1024-frame window with a keyframe strip and the subtitle text. See [`plot_segmentation.py`](plot_segmentation.py).
 

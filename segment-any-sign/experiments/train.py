@@ -106,6 +106,10 @@ def main() -> None:
                            "ends. Default validation: ablations must not touch "
                            "test, or repeated looks leak it into model selection. "
                            "Use test only for the model you finally report")
+    ours.add_argument("--note", default="",
+                      help="one line on what this run changes. Goes in the "
+                           "`change` column of the row added to the YouTube "
+                           "pretraining table when the run finishes")
     ours.add_argument("--limit", type=int, default=None)
     ours.add_argument("--velocity", choices=["on", "off"], default="off",
                       help="append fps-normalised velocity features (3->6 dims). "
@@ -172,12 +176,13 @@ def main() -> None:
                            "the run. Needs --sampling frame. Off by default: it "
                            "changes what the model sees, so it belongs in its own "
                            "run")
-    ours.add_argument("--dev-filter", choices=["on", "off"], default="on",
-                      help="score YouTube dev on the videos whose subtitle "
-                           "timings survive DEV_FILTER (82 of 164, 46 of 56 sign "
-                           "languages) rather than all of them. Checkpoint "
-                           "selection follows the same set, so 'off' reproduces "
-                           "what every run before 2026-09-11 selected on")
+    ours.add_argument("--dev-filter", choices=["on", "off"], default="off",
+                      help="validate YouTube on the videos whose subtitle "
+                           "timings survive DEV_FILTER (82 of 167, 46 of 56 sign "
+                           "languages) rather than all 167. Checkpoint selection "
+                           "follows the same set. Off by default: selection stays "
+                           "on raw dev, and the filtered score is reported after "
+                           "training by eval_youtube.py for information")
     ours.add_argument("--grad-clip", type=float, default=0.0, metavar="NORM",
                       help="clip the gradient to this L2 NORM (0 = off). This "
                            "rescales the whole gradient vector when its norm "
@@ -527,7 +532,8 @@ def main() -> None:
                                  split=mine.eval_split,
                                  plot_datasets=args.val_datasets,
                                  plot_device="cuda" if str(args.device) in
-                                 ("gpu", "cuda") else "cpu")
+                                 ("gpu", "cuda") else "cpu",
+                                 note=mine.note)
 
 
 def _with_workers(loader, workers: int | None):
@@ -965,7 +971,7 @@ def plot_references(root: Path, split: str) -> list:
 
 def evaluate_best_checkpoint(run_dir: Path, phrase: str, split: str,
                              plot_datasets: str = "dgs_corpus",
-                             plot_device: str = "cpu") -> None:
+                             plot_device: str = "cpu", note: str = "") -> None:
     """Evaluate the best checkpoint, once, through the benchmark's own scripts.
 
     Shells out to `benchmark/predict_dgs_2026.py` and `score.py` rather than
@@ -1011,6 +1017,22 @@ def evaluate_best_checkpoint(run_dir: Path, phrase: str, split: str,
          "--zoom-clips", "10", "--level", "phrase", "--device", plot_device,
          "--phrase", phrase] + plot_references(here.parent, split),
     ]
+    if split == "validation" and "youtube_25" in plot_datasets.split(","):
+        # YouTube dev on both sets: raw is what selected the checkpoint, filtered
+        # is reported beside it for information
+        youtube_scores = run_dir / "youtube_dev.json"
+        steps.insert(2, [sys.executable, str(here / "eval_youtube.py"),
+                         "--run", run_dir.name, "--set", "both",
+                         "--device", plot_device, "--json", str(youtube_scores)])
+        # after every score and before the figures: it only runs when all the
+        # numbers were written, since a row with a missing one is worse than no
+        # row, and a figure that fails to draw must not cost the run its row.
+        # Never for a dry or --limit run, which are all named _scratch_*
+        if not run_dir.name.startswith("_scratch_"):
+            steps.insert(3, [sys.executable, str(here / "add_result_row.py"),
+                             "--run", run_dir.name, "--note", note,
+                             "--youtube", str(youtube_scores),
+                             "--dgs", str(predictions)])
 
     output = []
     for step in steps:

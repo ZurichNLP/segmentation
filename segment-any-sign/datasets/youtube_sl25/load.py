@@ -208,23 +208,23 @@ def dev_ids(index: dict, per_language: int = DEV_PER_LANGUAGE) -> set[str]:
 
 
 def clip_specs(split: str = "train", per_language: int = DEV_PER_LANGUAGE,
-               rebuild_cache: bool = False, dev_filter: bool = True):
+               rebuild_cache: bool = False, dev_filter: bool = False):
     """Yield clip metadata: `id`, `pose_path`, `fps`, `total_frames`, `sentences`.
 
     Same shape as the DGS loader, so one dataset adapter serves both. `sentences`
     carry empty `glosses`: there is no sign-level supervision here.
 
     `dev_filter` keeps only the dev videos whose subtitle timings survive
-    `DEV_FILTER` — 82 of 164, over 46 of the 56 sign languages. Pass False for
-    the raw set, which is what every run before 2026-09-11 validated on.
+    `DEV_FILTER` — 82 of the 167, over 46 of the 56 sign languages. Off by
+    default: checkpoints are selected on the raw set, and the filtered one is
+    reported beside it for information.
     """
     index = video_index()
     meta = _pose_meta(index, rebuild=rebuild_cache)
     all_cues = _cues(index, rebuild=rebuild_cache)
     held_out = dev_ids(index, per_language)
-    # The dev set is filtered by default and the training set never is: an
-    # unreliable label is still worth learning from at this scale, but scoring
-    # against one only adds noise to the number we steer by.
+    # Only the dev set is ever filtered, and only on request: an unreliable label
+    # is still worth learning from at this scale.
     keep = dev_keep(per_language) if (split == "dev" and dev_filter) else None
 
     for vid, paths in index.items():
@@ -290,9 +290,14 @@ def _motion(pose) -> "np.ndarray":
 
 
 def dev_quality(per_language: int = DEV_PER_LANGUAGE, rebuild: bool = False) -> dict:
-    """Alignment measures for the dev videos. See `measure_quality`."""
-    return measure_quality(sorted(dev_ids(video_index(), per_language)),
-                           rebuild=rebuild)
+    """Alignment measures for the dev videos, and only those. See
+    `measure_quality`."""
+    ids = sorted(dev_ids(video_index(), per_language))
+    # the cache also holds every training video the sampling schedule measured,
+    # so return the dev ids alone — returning the whole cache made `dev_keep`
+    # answer 17,864 where it meant 82
+    quality = measure_quality(ids, rebuild=rebuild)
+    return {vid: quality.get(vid) for vid in ids}
 
 
 def measure_quality(ids, rebuild: bool = False, workers: int = 1) -> dict:

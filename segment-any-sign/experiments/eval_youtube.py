@@ -7,15 +7,17 @@ gap, using the same [`../metrics/`](../metrics/) code and the same decoder as
 everything else, so a row here is comparable to a row from either.
 
     python experiments/eval_youtube.py --run 02_pretrain_youtube_b80-2026.09.10
-    python experiments/eval_youtube.py --run <run> --raw      # unfiltered dev
+    python experiments/eval_youtube.py --run <run> --set raw   # one set only
 
-`--raw` scores the 167-video set every run before 2026-09-11 validated on.
-Without it, the 82 videos whose subtitle timings survive `DEV_FILTER`.
+`raw` is all 167 dev videos, the set checkpoints are selected on. `filtered` is
+the 82 of those whose subtitle timings survive `DEV_FILTER`, reported beside it
+for information. Both by default.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -111,23 +113,34 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True, help="run directory under dist/")
     parser.add_argument("--which", default="best", choices=["best", "last"])
-    parser.add_argument("--raw", action="store_true",
-                        help="score the unfiltered 167-video dev set")
+    parser.add_argument("--set", default="both",
+                        choices=["raw", "filtered", "both"],
+                        help="raw: all 167 dev videos, the selection set; "
+                             "filtered: the 82 passing DEV_FILTER")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--json", type=Path, default=None,
+                        help="also write the scores here, keyed by set — what "
+                             "add_result_row.py reads")
     args = parser.parse_args()
 
     from experiments.plot_segmentation import newest_checkpoint
 
     checkpoint = newest_checkpoint(DIST / args.run, args.which)
-    print(f"{args.run} / {args.which}   dev set: "
-          f"{'raw' if args.raw else 'filtered'}")
-    result = score(checkpoint, dev_filter=not args.raw, device=args.device,
-                   limit=args.limit)
-    print(f"\n{result['clips']} clips scored"
-          + (f", {result['skipped']} skipped" if result["skipped"] else ""))
-    print("  F1-ma {frame_f1:.3f}   F1-mi {frame_f1_micro:.3f}   "
-          "IoU {iou:.3f}   % {percentage:.3f}   mF1S {mf1s:.3f}".format(**result))
+    sets = ["raw", "filtered"] if args.set == "both" else [args.set]
+    results = {}
+    for name in sets:
+        print(f"{args.run} / {args.which}   dev set: {name}")
+        result = results[name] = score(checkpoint, dev_filter=name == "filtered",
+                                       device=args.device, limit=args.limit)
+        print(f"{result['clips']} clips scored"
+              + (f", {result['skipped']} skipped" if result["skipped"] else ""))
+        print("  F1-ma {frame_f1:.3f}   F1-mi {frame_f1_micro:.3f}   "
+              "IoU {iou:.3f}   % {percentage:.3f}   mF1S {mf1s:.3f}\n"
+              .format(**result))
+    if args.json:
+        args.json.write_text(json.dumps(results, indent=2))
+        print(f"wrote {args.json}")
 
 
 if __name__ == "__main__":

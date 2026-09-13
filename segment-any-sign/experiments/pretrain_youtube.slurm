@@ -19,10 +19,20 @@
 #            experiments/pretrain_youtube.slurm 2,100,1 _b100
 #     sbatch --job-name=02_pretrain_youtube_filtered \
 #            experiments/pretrain_youtube.slurm 2,80,1 _filtered linear
+#     sbatch --job-name=02_pretrain_youtube_b40 \
+#            experiments/pretrain_youtube.slurm 2,40,1 _b40 off "weights 2,40,1"
 #
-# Three positional arguments, all optional: the O,B,I class weights, a suffix
-# for the run name, and the sampling schedule (off, linear, cosine) that decays
-# the weight of videos whose subtitle timings fail DEV_FILTER. The suffix is what keeps parallel runs apart — same day, same
+# Four positional arguments, all optional, in order:
+#   1. the O,B,I class weights
+#   2. a suffix for the run name
+#   3. the sampling schedule (off, linear, cosine) that decays the weight of
+#      videos whose subtitle timings fail DEV_FILTER. Off by default: run 4 in
+#      experiments/README.md found no gain
+#   4. a note for the `change` column of the row the run adds to
+#      experiments/README.md when it finishes; defaults to weights and schedule
+#
+# Selection is on raw YouTube dev; the filtered score is reported after
+# training. The suffix is what keeps parallel runs apart — same day, same
 # base name means the same `dist/<name>-<date>` directory, and Lightning would
 # write best-v1.ckpt into it beside the other run's checkpoint. The suffix also
 # separates the W&B run and the prediction JSON, which are both named from the
@@ -50,6 +60,7 @@ set -euo pipefail
 WEIGHTS="${1:-2,20,1}"     # O,B,I
 SUFFIX="${2:-}"            # appended to the run name, e.g. _b100
 SCHEDULE="${3:-off}"       # off | linear | cosine
+NOTE="${4:-weights ${WEIGHTS}, schedule ${SCHEDULE}, 40k steps}"   # README `change` column
 
 REPO=/home/zifjia/segmentation/segment-any-sign
 PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
@@ -66,13 +77,14 @@ echo
 
 srun "$PYTHON" experiments/train.py \
     --run_name "02_pretrain_youtube${SUFFIX}" \
+    --note "${NOTE}" \
     --datasets youtube_25 \
     --val-datasets youtube_25,dgs_corpus \
     --levels phrase \
     --phrase glosses \
     --class-weights "${WEIGHTS}" \
     --sample-schedule "${SCHEDULE}" \
-    --dev-filter on \
+    --dev-filter off \
     --select-on mean_mf1s \
     --sampling frame \
     --velocity off \

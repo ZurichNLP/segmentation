@@ -41,7 +41,7 @@ class YouTube25Dataset(BaseSegmentationDataset):
         frame_dropout: float = 0.0,
         body_part_dropout: float = 0.0,
         per_language: int = yt.DEV_PER_LANGUAGE,
-        dev_filter: bool = True,
+        dev_filter: bool = False,
         limit: int | None = None,
         **_ignored,
     ):
@@ -110,7 +110,7 @@ class YouTube25Dataset(BaseSegmentationDataset):
         return cls(split=split,
                    per_language=getattr(args, "dev_per_language",
                                         yt.DEV_PER_LANGUAGE),
-                   dev_filter=getattr(args, "dev_filter", "on") == "on",
+                   dev_filter=getattr(args, "dev_filter", "off") == "on",
                    limit=getattr(args, "limit", None),
                    **augment_kwargs)
 
