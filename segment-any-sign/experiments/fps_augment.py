@@ -185,6 +185,17 @@ def sampling_weights(total_frames, fps, num_frames: int,
     return num_frames / inverse
 
 
+def widened(length: int, drop_rate: float) -> int:
+    """Frames to lay out so that dropping `drop_rate` of them leaves `length`.
+
+    Upstream drops `int((n - 2) x rate)` of a window's `n` frames. Solving for
+    the `n` that leaves `length` gives this, so the dropped share is upstream's.
+    """
+    if drop_rate <= 0.0 or length <= 2:
+        return length
+    return length + int((length - 2) * drop_rate / (1.0 - drop_rate))
+
+
 def load_window(pose_path: str, fps: float, total_frames: int,
                 signs: list[dict], sentences: list[dict], split,
                 num_frames: int, velocity: bool, frame_dropout: float,
@@ -196,13 +207,17 @@ def load_window(pose_path: str, fps: float, total_frames: int,
     False, upstream's own un-augmented window — `num_frames` native frames from
     a uniformly random start — reproduced exactly.
 
-    Frame dropout, body-part dropout and velocity follow upstream's code, applied
-    after the window is built as upstream applies them, with one correction:
-    labels always come from the kept frames' real times. Upstream's un-augmented
-    path drops frames and then labels the survivors as if still evenly spaced,
-    so with 15% dropout its last frames are labelled from 15% earlier in the
-    window. `tempo` applies `stretch_clock` last, once labels and velocity have
-    their real times.
+    Frame dropout drops the same share of middle frames as upstream — a rate
+    drawn uniformly from 0 to `frame_dropout`, never the first or last frame —
+    with two differences. The window is widened first (`widened`), so what is
+    left is still `length` frames rather than a shorter window padded back: the
+    model has no attention mask, so padding would be attended to. And labels come
+    from the kept frames' real times; upstream's un-augmented path labels the
+    survivors as if still evenly spaced, so with 15% dropout its last frames are
+    labelled from 15% earlier in the window.
+
+    Body-part dropout and velocity follow upstream's code. `tempo` applies
+    `stretch_clock` last, once labels and velocity have their real times.
     """
     import torch
     from pose_format import Pose
@@ -212,29 +227,47 @@ def load_window(pose_path: str, fps: float, total_frames: int,
                                                        preprocess_pose)
 
     if str(split) != "train":
-        raise ValueError(f"frame-rate augmentation is training-only, got {split!r}")
+        raise ValueError(f"load_window builds training windows only, got {split!r}")
+
+    # Frame dropout draws its rate first, because it widens the window: `count`
+    # positions are laid out and `count - length` of them dropped, so the window
+    # still holds `length` frames — never fewer than it would without dropout.
+    drop_rate = rng.uniform(0.0, frame_dropout) if frame_dropout > 0.0 else 0.0
 
     if resample:
         tiles, actual = plan(total_frames, fps, draw_rate(rng), num_frames)
         tiles, actual = int(tiles), float(actual)
         length = window_length(total_frames, fps, tiles, actual, num_frames)
+        count = widened(length, drop_rate)
         tile = rng.randrange(tiles)
 
         # Positions in native-frame units. The tile spans `span` frame slots,
         # frame m sitting at the centre of slot m, and samples sit at the centres
-        # of `length` equal sub-slots. Times keep the unclamped positions so they
-        # stay strictly increasing; only the pose lookup is held inside the video.
+        # of `count` equal sub-slots. Widening only packs them denser inside the
+        # same tile, so sampling stays frame-uniform. Times keep the unclamped
+        # positions so they stay strictly increasing; only the pose lookup is
+        # held inside the video.
         span = total_frames / tiles
-        positions = tile * span - 0.5 + (np.arange(length) + 0.5) * (span / length)
+        positions = tile * span - 0.5 + (np.arange(count) + 0.5) * (span / count)
     else:
-        # upstream's window, same draw: `random.randint(0, total - num_frames)`
-        actual = float(fps)
-        if total_frames > num_frames:
-            start, length = rng.randint(0, total_frames - num_frames), num_frames
-        else:
-            start, length = 0, total_frames
-        span = float(length)
-        positions = start + np.arange(length, dtype=np.float64)
+        # upstream's window, same draw: `random.randint(0, total - num_frames)`,
+        # widened by dropout where the video has room. A video shorter than
+        # `num_frames` has none, and is left whole rather than made shorter.
+        length = min(total_frames, num_frames)
+        count = (min(total_frames, widened(length, drop_rate))
+                 if total_frames >= num_frames else length)
+        start = rng.randint(0, total_frames - count) if total_frames > count else 0
+        span = float(count)
+        positions = start + np.arange(count, dtype=np.float64)
+
+    if count > length:
+        # upstream's rule: never the first or last frame
+        dropped = rng.sample(range(1, count - 1), count - length)
+        keep = np.ones(count, dtype=bool)
+        keep[dropped] = False
+        positions = positions[keep]
+    # the kept frames' average rate, which a rescaled clock is measured against
+    rate = length * fps / span
     lookup = np.clip(positions, 0.0, total_frames - 1)
     first = int(np.floor(lookup[0]))
     last = int(np.ceil(lookup[-1]))
@@ -260,23 +293,12 @@ def load_window(pose_path: str, fps: float, total_frames: int,
     # an un-resampled window reproduces its times bit for bit
     frame_times = (positions - positions[0]).astype(np.float32) / fps
     frame_times_ms = frame_times * 1000
-    actual_frames = length
 
     if body_part_dropout > 0.0:
         if rng.random() < body_part_dropout:
             pose_data[:, 8:29, :] = 0
         if rng.random() < body_part_dropout:
             pose_data[:, 29:50, :] = 0
-
-    if frame_dropout > 0.0 and actual_frames > 2:
-        drop_rate = rng.uniform(0.0, frame_dropout)
-        n_drop = int((actual_frames - 2) * drop_rate)
-        if n_drop > 0:
-            drop = set(rng.sample(range(1, actual_frames - 1), n_drop))
-            keep = np.array([i not in drop for i in range(actual_frames)])
-            pose_data = pose_data[keep]
-            frame_times = frame_times[keep]
-            frame_times_ms = frame_times_ms[keep]
 
     if velocity:
         pose_data = np.concatenate(
@@ -294,7 +316,7 @@ def load_window(pose_path: str, fps: float, total_frames: int,
     timestamps = torch.from_numpy(frame_times)
     return {
         "pose": torch.from_numpy(pose_data),
-        "timestamps": stretch_clock(timestamps, actual, rng) if tempo else timestamps,
+        "timestamps": stretch_clock(timestamps, rate, rng) if tempo else timestamps,
         "bio": {
             "sign": torch.from_numpy(create_bio_from_times(clip(signs), frame_times_ms)).long(),
             "sentence": torch.from_numpy(create_bio_from_times(clip(sentences), frame_times_ms)).long(),
