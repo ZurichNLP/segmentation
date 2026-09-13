@@ -72,6 +72,32 @@ QUADRATURE = 1024
 #: range checks tolerate float error when a rate lands exactly on a bound
 _TOLERANCE = 1e-9
 
+#: tempo stretch, upstream's constants: in this share of training windows the
+#: clock the model reads runs as if the frames came at one of these rates
+TEMPO_PROBABILITY = 0.05
+TEMPO_FPS = (24.0, 30.0, 60.0)
+
+
+def stretch_clock(timestamps, rate: float, rng=random):
+    """Upstream's tempo stretch, with the labels left where they belong.
+
+    `timestamps` are a training window's real times in seconds and `rate` the
+    frame rate they were taken at — the native rate, or the resampled one under
+    `--fps-aug on`. With probability `TEMPO_PROBABILITY` they are rescaled to run
+    at a rate from `TEMPO_FPS`, so consecutive frames sit `1 / tempo` apart on
+    the clock, exactly as upstream's tempo branch sets them.
+
+    Only the clock changes. Poses and labels are what the real times gave, so
+    signing looks faster or slower to the attention layers, whose RoPE is the
+    one place the model reads timestamps, while every boundary stays on its
+    pose. Upstream built its labels from the rescaled clock instead, which is
+    the bug this avoids. Velocity, computed before this from real times, is
+    left alone too.
+    """
+    if rng.random() >= TEMPO_PROBABILITY:
+        return timestamps
+    return timestamps * (rate / rng.choice(TEMPO_FPS))
+
 
 def draw_rate(rng=random) -> float:
     """One target rate. Rejection sampling; about 98% of draws are accepted.
@@ -162,11 +188,21 @@ def sampling_weights(total_frames, fps, num_frames: int,
 def load_window(pose_path: str, fps: float, total_frames: int,
                 signs: list[dict], sentences: list[dict], split,
                 num_frames: int, velocity: bool, frame_dropout: float,
-                body_part_dropout: float, rng=random) -> dict:
-    """One augmented training window, in the shape `load_and_augment` returns.
+                body_part_dropout: float, tempo: bool = False,
+                resample: bool = True, rng=random) -> dict:
+    """One training window, in the shape `load_and_augment` returns.
 
-    Frame dropout, body-part dropout and velocity follow upstream's code line
-    for line, applied after resampling as upstream applies them.
+    `resample` picks the window: a resampled tile as described above, or, when
+    False, upstream's own un-augmented window — `num_frames` native frames from
+    a uniformly random start — reproduced exactly.
+
+    Frame dropout, body-part dropout and velocity follow upstream's code, applied
+    after the window is built as upstream applies them, with one correction:
+    labels always come from the kept frames' real times. Upstream's un-augmented
+    path drops frames and then labels the survivors as if still evenly spaced,
+    so with 15% dropout its last frames are labelled from 15% earlier in the
+    window. `tempo` applies `stretch_clock` last, once labels and velocity have
+    their real times.
     """
     import torch
     from pose_format import Pose
@@ -178,17 +214,27 @@ def load_window(pose_path: str, fps: float, total_frames: int,
     if str(split) != "train":
         raise ValueError(f"frame-rate augmentation is training-only, got {split!r}")
 
-    tiles, actual = plan(total_frames, fps, draw_rate(rng), num_frames)
-    tiles, actual = int(tiles), float(actual)
-    length = window_length(total_frames, fps, tiles, actual, num_frames)
-    tile = rng.randrange(tiles)
+    if resample:
+        tiles, actual = plan(total_frames, fps, draw_rate(rng), num_frames)
+        tiles, actual = int(tiles), float(actual)
+        length = window_length(total_frames, fps, tiles, actual, num_frames)
+        tile = rng.randrange(tiles)
 
-    # Positions in native-frame units. The tile spans `span` frame slots, frame m
-    # sitting at the centre of slot m, and samples sit at the centres of `length`
-    # equal sub-slots. Times keep the unclamped positions so they stay strictly
-    # increasing; only the pose lookup is held inside the video.
-    span = total_frames / tiles
-    positions = tile * span - 0.5 + (np.arange(length) + 0.5) * (span / length)
+        # Positions in native-frame units. The tile spans `span` frame slots,
+        # frame m sitting at the centre of slot m, and samples sit at the centres
+        # of `length` equal sub-slots. Times keep the unclamped positions so they
+        # stay strictly increasing; only the pose lookup is held inside the video.
+        span = total_frames / tiles
+        positions = tile * span - 0.5 + (np.arange(length) + 0.5) * (span / length)
+    else:
+        # upstream's window, same draw: `random.randint(0, total - num_frames)`
+        actual = float(fps)
+        if total_frames > num_frames:
+            start, length = rng.randint(0, total_frames - num_frames), num_frames
+        else:
+            start, length = 0, total_frames
+        span = float(length)
+        positions = start + np.arange(length, dtype=np.float64)
     lookup = np.clip(positions, 0.0, total_frames - 1)
     first = int(np.floor(lookup[0]))
     last = int(np.ceil(lookup[-1]))
@@ -245,9 +291,10 @@ def load_window(pose_path: str, fps: float, total_frames: int,
                  "end": min(end_ms - start_ms, s["end"] - start_ms)}
                 for s in spans if s["end"] > start_ms and s["start"] < end_ms]
 
+    timestamps = torch.from_numpy(frame_times)
     return {
         "pose": torch.from_numpy(pose_data),
-        "timestamps": torch.from_numpy(frame_times),
+        "timestamps": stretch_clock(timestamps, actual, rng) if tempo else timestamps,
         "bio": {
             "sign": torch.from_numpy(create_bio_from_times(clip(signs), frame_times_ms)).long(),
             "sentence": torch.from_numpy(create_bio_from_times(clip(sentences), frame_times_ms)).long(),
@@ -255,12 +302,32 @@ def load_window(pose_path: str, fps: float, total_frames: int,
     }
 
 
+def uses_ours(dataset) -> bool:
+    """Should this dataset's windows come from `load_window`?
+
+    Whenever a trick could move frames against their labels: resampling, a
+    rescaled clock, or frame dropout, whose labels upstream gets wrong on its
+    un-augmented path. Training only. Anything else — plain training, and every
+    evaluation — keeps upstream's `load_and_augment` untouched.
+    """
+    return (str(dataset.split) == "train"
+            and (getattr(dataset, "fps_resample", False)
+                 or getattr(dataset, "tempo_stretch", False)
+                 or getattr(dataset, "frame_dropout", 0.0) > 0.0))
+
+
 def load_item(dataset, item: dict, rng=random) -> dict:
-    """`load_window` for one of a dataset adapter's items, with its settings."""
+    """`load_window` for one of a dataset adapter's items, with its settings.
+
+    Flags are read with `getattr` so a dataset built before a flag existed reads
+    it as off.
+    """
     return load_window(
         pose_path=item["pose_path"], fps=item["fps"],
         total_frames=item["total_frames"], signs=item["glosses"],
         sentences=item["sentences"], split=dataset.split,
         num_frames=dataset.num_frames, velocity=dataset.velocity,
         frame_dropout=dataset.frame_dropout,
-        body_part_dropout=dataset.body_part_dropout, rng=rng)
+        body_part_dropout=dataset.body_part_dropout,
+        tempo=getattr(dataset, "tempo_stretch", False),
+        resample=getattr(dataset, "fps_resample", False), rng=rng)

@@ -147,6 +147,12 @@ def main() -> None:
                            "around 30 fps within 20-60, always num_frames long, "
                            "every frame equally likely to be seen. Ours, in "
                            "experiments/fps_augment.py; upstream's is never used")
+    ours.add_argument("--tempo-stretch", choices=["on", "off"], default="off",
+                      help="upstream's tempo stretch with correct labels: in 5%% "
+                           "of training windows the timestamps are rescaled to "
+                           "run at 24, 30 or 60 fps. Only the clock RoPE reads "
+                           "changes; poses and labels keep their real times. "
+                           "Works with or without --fps-aug")
     ours.add_argument("--class-weights", default="auto",
                       help="loss class weighting. auto (default) = 2023's inverse "
                            "class frequency when dice is off, unweighted when it "
@@ -408,6 +414,7 @@ def main() -> None:
     # `--fps-aug on` selects ours, which the dataset adapters read from here
     args.fps_aug = False
     args.fps_resample = mine.fps_aug == "on"
+    args.tempo_stretch = mine.tempo_stretch == "on"
 
     # `fps_aug` upstream controls *two* things: the resampling, and which label
     # builder runs (`create_bio_from_times` when on, `create_bio` when off).
@@ -855,6 +862,7 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"attn_dropout {args.attn_dropout:g}  velocity {args.velocity}"
           f"\n  fps aug     "
           + ("ours, 20-60 fps around 30" if args.fps_resample else "off")
+          + f"  tempo stretch {'5% of windows' if args.tempo_stretch else 'off'}"
           + f"  num_frames {args.num_frames}"
           f"\n  sampling    {mine.sampling}-uniform"
           f"\n  gradients   clip {mine.grad_clip or 'off'}"

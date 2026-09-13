@@ -11,8 +11,9 @@ clips, filters and gold the benchmark scores. That is the point: a training run
 and a benchmark row must not be able to disagree about what the data is.
 
 Everything downstream — windowing, augmentation, BIO construction, collation — is
-upstream's `load_and_augment`, untouched, with one exception: training windows
-under `--fps-aug on` come from our `fps_augment.load_item` instead.
+upstream's `load_and_augment`, untouched, except for training windows under
+`--fps-aug on`, `--tempo-stretch on` or frame dropout, which come from our
+`fps_augment.load_item` so that no trick can move a frame against its label.
 
     from experiments import dgs_dataset  # registers "dgs_corpus"
 """
@@ -52,6 +53,7 @@ class DGSCorpusDataset(BaseSegmentationDataset):
         backup: str = dgs_data.BACKUP,
         splits_path: str | None = None,
         fps_resample: bool = False,
+        tempo_stretch: bool = False,
     ):
         self.split = split
         self.num_frames = num_frames
@@ -63,8 +65,10 @@ class DGSCorpusDataset(BaseSegmentationDataset):
         self.limit = limit
         self.backup = backup
         self.splits_path = splits_path
-        # our frame-rate augmentation, experiments/fps_augment.py; training only
+        # our frame-rate augmentation and tempo stretch, experiments/fps_augment.py;
+        # both training only
         self.fps_resample = fps_resample
+        self.tempo_stretch = tempo_stretch
 
         self._init_split_tracking()
         self.items = []
@@ -103,8 +107,8 @@ class DGSCorpusDataset(BaseSegmentationDataset):
         }
 
     def __getitem__(self, idx: int) -> dict:
-        if self.fps_resample and self.split == Split.TRAIN:
-            from experiments.fps_augment import load_item
+        from experiments.fps_augment import load_item, uses_ours
+        if uses_ours(self):
             return load_item(self, self.items[idx])
         return super().__getitem__(idx)
 
@@ -115,6 +119,7 @@ class DGSCorpusDataset(BaseSegmentationDataset):
                    backup=getattr(args, "backup", dgs_data.BACKUP),
                    splits_path=getattr(args, "splits_path", None),
                    fps_resample=getattr(args, "fps_resample", False),
+                   tempo_stretch=getattr(args, "tempo_stretch", False),
                    **augment_kwargs)
 
 

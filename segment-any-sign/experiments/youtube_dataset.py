@@ -43,6 +43,7 @@ class YouTube25Dataset(BaseSegmentationDataset):
         per_language: int = yt.DEV_PER_LANGUAGE,
         dev_filter: bool = False,
         fps_resample: bool = False,
+        tempo_stretch: bool = False,
         limit: int | None = None,
         **_ignored,
     ):
@@ -53,8 +54,10 @@ class YouTube25Dataset(BaseSegmentationDataset):
         self.frame_dropout = frame_dropout
         self.body_part_dropout = body_part_dropout
         self.dev_filter = dev_filter
-        # our frame-rate augmentation, experiments/fps_augment.py; training only
+        # our frame-rate augmentation and tempo stretch, experiments/fps_augment.py;
+        # both training only
         self.fps_resample = fps_resample
+        self.tempo_stretch = tempo_stretch
 
         self._init_split_tracking()
         self.items = []
@@ -84,8 +87,8 @@ class YouTube25Dataset(BaseSegmentationDataset):
     def __getitem__(self, index: int) -> dict:
         item = self.items[index]
         try:
-            if self.fps_resample and self.split == Split.TRAIN:
-                from experiments.fps_augment import load_item
+            from experiments.fps_augment import load_item, uses_ours
+            if uses_ours(self):
                 datum = load_item(self, item)
             else:
                 datum = load_and_augment(
@@ -119,6 +122,7 @@ class YouTube25Dataset(BaseSegmentationDataset):
                                         yt.DEV_PER_LANGUAGE),
                    dev_filter=getattr(args, "dev_filter", "off") == "on",
                    fps_resample=getattr(args, "fps_resample", False),
+                   tempo_stretch=getattr(args, "tempo_stretch", False),
                    limit=getattr(args, "limit", None),
                    **augment_kwargs)
 

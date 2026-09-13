@@ -22,7 +22,7 @@
 #     sbatch --job-name=02_pretrain_youtube_b40 \
 #            experiments/pretrain_youtube.slurm 2,40,1 _b40 off "weights 2,40,1"
 #
-# Five positional arguments, all optional, in order:
+# Six positional arguments, all optional, in order:
 #   1. the O,B,I class weights
 #   2. a suffix for the run name
 #   3. the sampling schedule (off, linear, cosine) that decays the weight of
@@ -32,6 +32,8 @@
 #      experiments/README.md when it finishes; defaults to weights and schedule
 #   5. frame-rate augmentation, off or on: each training window resampled to
 #      20-60 fps around 30, always 1024 frames (experiments/fps_augment.py)
+#   6. tempo stretch, off or on: in 5% of training windows the timestamps RoPE
+#      reads run at 24, 30 or 60 fps; poses and labels are unchanged
 #
 # Selection is on raw YouTube dev; the filtered score is reported after
 # training. The suffix is what keeps parallel runs apart — same day, same
@@ -63,7 +65,8 @@ WEIGHTS="${1:-2,20,1}"     # O,B,I
 SUFFIX="${2:-}"            # appended to the run name, e.g. _b100
 SCHEDULE="${3:-off}"       # off | linear | cosine
 FPS_AUG="${5:-off}"        # off | on (experiments/fps_augment.py)
-NOTE="${4:-weights ${WEIGHTS}, schedule ${SCHEDULE}, fps aug ${FPS_AUG}, 40k steps}"   # README `change` column
+TEMPO="${6:-off}"          # off | on (tempo stretch, experiments/fps_augment.py)
+NOTE="${4:-weights ${WEIGHTS}, schedule ${SCHEDULE}, fps aug ${FPS_AUG}, tempo ${TEMPO}, 40k steps}"   # README `change` column
 
 REPO=/home/zifjia/segmentation/segment-any-sign
 PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
@@ -71,7 +74,7 @@ PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
 mkdir -p /scratch/zifjia/segment-any-sign/slurm
 cd "$REPO"
 
-echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   fps aug ${FPS_AUG}   run 02_pretrain_youtube${SUFFIX}"
+echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   fps aug ${FPS_AUG}   tempo ${TEMPO}   run 02_pretrain_youtube${SUFFIX}"
 echo "node       $(hostname)"
 echo "job        ${SLURM_JOB_ID:-none}  cpus ${SLURM_CPUS_PER_TASK:-?}"
 echo "commit     $(git rev-parse --short HEAD)$(git diff --quiet || echo ' (dirty)')"
@@ -92,6 +95,7 @@ srun "$PYTHON" experiments/train.py \
     --sampling frame \
     --velocity off \
     --fps-aug "${FPS_AUG}" \
+    --tempo-stretch "${TEMPO}" \
     --early-stop off \
     --max-steps 40000 \
     --val-every 400 \
