@@ -105,7 +105,7 @@ The 2026 shipped checkpoint against the same architecture trained by us — all 
 
 ### Learning-rate sweep
 
-Ten runs differing only in learning rate, spanning four decades. Every trick is off — dice loss, all three dropouts and velocity — leaving `fps_aug` on, at batch 64 with `adamw-onecycle`, 500 epochs and patience 50. None hit the 5-hour cap; runtimes ran 21 min (lr 1e-2, best epoch 20) to 4h14m (lr 1e-5, best epoch 482).
+Ten runs differing only in learning rate, spanning four decades. Every trick is off — dice loss, all three dropouts and velocity — leaving upstream's `fps_aug` on (whose 5% tempo-stretch branch, found later, labels frames from the wrong instant; `--fps-aug on` now selects our own, [`fps_augment.py`](fps_augment.py)), at batch 64 with `adamw-onecycle`, 500 epochs and patience 50. None hit the 5-hour cap; runtimes ran 21 min (lr 1e-2, best epoch 20) to 4h14m (lr 1e-5, best epoch 482).
 
 **The optimum is inside the range and broad.** By the selection metric, mean of sign and phrase mF1S: 5e-4 gives 0.382, 3e-4 gives 0.381, 1e-3 gives 0.375. Those three are a plateau, not a ranking — with no seed replicates a 0.007 spread is not a result. Both tails fall away monotonically, so no wider sweep is needed.
 

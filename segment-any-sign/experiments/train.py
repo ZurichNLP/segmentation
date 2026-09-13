@@ -16,9 +16,10 @@ later experiment turns exactly one trick back on:
     velocity off             (on, unswitchable) --attn_dropout 0      (0.1)
     fps_aug off              (on, unswitchable) early stopping off     (patience 10)
 
-`fps_aug` stays on: upstream calls it essential, and disabling it also switches
-label construction from `create_bio_from_times` to `create_bio`, which would
-confound the ablation.
+`--fps-aug on` is our frame-rate augmentation, `experiments/fps_augment.py`, not
+upstream's `fps_aug`, whose tempo branch labels frames from the wrong instant.
+Upstream's stays off, and the label rule is the same either way (see the
+`create_bio` shim below).
 
 These flags are ours and are stripped before upstream parses:
 
@@ -142,7 +143,10 @@ def main() -> None:
                            "early leaves the schedule near peak LR and never "
                            "visits its low-LR phase")
     ours.add_argument("--fps-aug", choices=["on", "off"], default="off",
-                      help="random 25-50 fps resampling per training clip")
+                      help="resample each training window to a rate drawn "
+                           "around 30 fps within 20-60, always num_frames long, "
+                           "every frame equally likely to be seen. Ours, in "
+                           "experiments/fps_augment.py; upstream's is never used")
     ours.add_argument("--class-weights", default="auto",
                       help="loss class weighting. auto (default) = 2023's inverse "
                            "class frequency when dice is off, unweighted when it "
@@ -400,7 +404,10 @@ def main() -> None:
         args.patience = max(1, round(0.1 * args.epochs))
 
     args.velocity = mine.velocity == "on"
-    args.fps_aug = mine.fps_aug == "on"
+    # upstream's fps_aug stays off for good: its tempo branch mislabels frames.
+    # `--fps-aug on` selects ours, which the dataset adapters read from here
+    args.fps_aug = False
+    args.fps_resample = mine.fps_aug == "on"
 
     # `fps_aug` upstream controls *two* things: the resampling, and which label
     # builder runs (`create_bio_from_times` when on, `create_bio` when off).
@@ -645,13 +652,20 @@ def frame_uniform_loader(loader, workers: int | None = None):
     def lengths(dataset):
         if isinstance(dataset, ConcatDataset):
             return [n for part in dataset.datasets for n in lengths(part)]
+        if getattr(dataset, "fps_resample", False):
+            # tiles, not random starts: the weight is num_frames / E[1/tiles],
+            # on the same scale as a frame count — see fps_augment.py
+            from experiments.fps_augment import sampling_weights
+            return sampling_weights([item["total_frames"] for item in dataset.items],
+                                    [item["fps"] for item in dataset.items],
+                                    dataset.num_frames).tolist()
         return [float(item["total_frames"]) for item in dataset.items]
 
     weights = lengths(loader.dataset)
     sampler = WeightedRandomSampler(weights, num_samples=len(weights),
                                     replacement=True)
     print(f"  frame-uniform sampling over {len(weights):,} videos "
-          f"({min(weights):,.0f}-{max(weights):,.0f} frames each)")
+          f"(weights {min(weights):,.0f}-{max(weights):,.0f})")
     return DataLoader(loader.dataset, batch_size=loader.batch_size,
                       sampler=sampler, collate_fn=loader.collate_fn,
                       # capped like _with_workers: --limit can leave fewer clips
@@ -839,7 +853,9 @@ def report_effective_config(args, mine, run_name: str) -> None:
           f"frame_dropout {args.frame_dropout:g}  "
           f"body_part_dropout {args.body_part_dropout:g}  "
           f"attn_dropout {args.attn_dropout:g}  velocity {args.velocity}"
-          f"\n  tricks ON   fps_aug {args.fps_aug}  num_frames {args.num_frames}"
+          f"\n  fps aug     "
+          + ("ours, 20-60 fps around 30" if args.fps_resample else "off")
+          + f"  num_frames {args.num_frames}"
           f"\n  sampling    {mine.sampling}-uniform"
           f"\n  gradients   clip {mine.grad_clip or 'off'}"
           f"  norms logged every {mine.grad_log_every or 'never'} steps"

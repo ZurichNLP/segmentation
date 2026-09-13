@@ -11,7 +11,8 @@ clips, filters and gold the benchmark scores. That is the point: a training run
 and a benchmark row must not be able to disagree about what the data is.
 
 Everything downstream — windowing, augmentation, BIO construction, collation — is
-upstream's `load_and_augment`, untouched. This class only supplies `self.items`.
+upstream's `load_and_augment`, untouched, with one exception: training windows
+under `--fps-aug on` come from our `fps_augment.load_item` instead.
 
     from experiments import dgs_dataset  # registers "dgs_corpus"
 """
@@ -50,6 +51,7 @@ class DGSCorpusDataset(BaseSegmentationDataset):
         limit: int | None = None,
         backup: str = dgs_data.BACKUP,
         splits_path: str | None = None,
+        fps_resample: bool = False,
     ):
         self.split = split
         self.num_frames = num_frames
@@ -61,6 +63,8 @@ class DGSCorpusDataset(BaseSegmentationDataset):
         self.limit = limit
         self.backup = backup
         self.splits_path = splits_path
+        # our frame-rate augmentation, experiments/fps_augment.py; training only
+        self.fps_resample = fps_resample
 
         self._init_split_tracking()
         self.items = []
@@ -98,12 +102,19 @@ class DGSCorpusDataset(BaseSegmentationDataset):
             "splits": {s.value: sorted(ids) for s, ids in self._all_split_ids.items()},
         }
 
+    def __getitem__(self, idx: int) -> dict:
+        if self.fps_resample and self.split == Split.TRAIN:
+            from experiments.fps_augment import load_item
+            return load_item(self, self.items[idx])
+        return super().__getitem__(idx)
+
     @classmethod
     def from_args(cls, split: Split, args: Namespace, **augment_kwargs) -> DGSCorpusDataset:
         return cls(split=split, phrase=getattr(args, "phrase", "glosses"),
                    limit=getattr(args, "limit", None),
                    backup=getattr(args, "backup", dgs_data.BACKUP),
                    splits_path=getattr(args, "splits_path", None),
+                   fps_resample=getattr(args, "fps_resample", False),
                    **augment_kwargs)
 
 

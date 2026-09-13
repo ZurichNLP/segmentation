@@ -42,6 +42,7 @@ class YouTube25Dataset(BaseSegmentationDataset):
         body_part_dropout: float = 0.0,
         per_language: int = yt.DEV_PER_LANGUAGE,
         dev_filter: bool = False,
+        fps_resample: bool = False,
         limit: int | None = None,
         **_ignored,
     ):
@@ -52,6 +53,8 @@ class YouTube25Dataset(BaseSegmentationDataset):
         self.frame_dropout = frame_dropout
         self.body_part_dropout = body_part_dropout
         self.dev_filter = dev_filter
+        # our frame-rate augmentation, experiments/fps_augment.py; training only
+        self.fps_resample = fps_resample
 
         self._init_split_tracking()
         self.items = []
@@ -81,13 +84,17 @@ class YouTube25Dataset(BaseSegmentationDataset):
     def __getitem__(self, index: int) -> dict:
         item = self.items[index]
         try:
-            datum = load_and_augment(
-                pose_path=item["pose_path"], fps=item["fps"],
-                total_frames=item["total_frames"], signs=item["glosses"],
-                sentences=item["sentences"], split=self.split,
-                num_frames=self.num_frames, velocity=self.velocity,
-                fps_aug=self.fps_aug, frame_dropout=self.frame_dropout,
-                body_part_dropout=self.body_part_dropout)
+            if self.fps_resample and self.split == Split.TRAIN:
+                from experiments.fps_augment import load_item
+                datum = load_item(self, item)
+            else:
+                datum = load_and_augment(
+                    pose_path=item["pose_path"], fps=item["fps"],
+                    total_frames=item["total_frames"], signs=item["glosses"],
+                    sentences=item["sentences"], split=self.split,
+                    num_frames=self.num_frames, velocity=self.velocity,
+                    fps_aug=self.fps_aug, frame_dropout=self.frame_dropout,
+                    body_part_dropout=self.body_part_dropout)
         except Exception as error:
             # a truncated pose should cost one sample, not the whole run
             print(f"skipping {item['id']}: {type(error).__name__}: {error}")
@@ -111,6 +118,7 @@ class YouTube25Dataset(BaseSegmentationDataset):
                    per_language=getattr(args, "dev_per_language",
                                         yt.DEV_PER_LANGUAGE),
                    dev_filter=getattr(args, "dev_filter", "off") == "on",
+                   fps_resample=getattr(args, "fps_resample", False),
                    limit=getattr(args, "limit", None),
                    **augment_kwargs)
 

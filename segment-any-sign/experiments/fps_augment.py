@@ -1,0 +1,266 @@
+"""Frame-rate augmentation that keeps every training window at `num_frames`.
+
+Replaces upstream's `fps_aug` (`sign_language_segmentation/datasets/common.py`)
+when `--fps-aug on`; upstream's is never used. It had two problems:
+
+  * it only lowers the frame rate, drawing 25-50 fps uniformly, so it never
+    touches 24-25 fps video and resamples only 14% of 30 fps clips — close to a
+    no-op on YouTube-SL-25
+  * in 5% of clips its "tempo stretch" builds the BIO labels from rescaled
+    timestamps while the poses stay in real time: on a 30 fps clip stretched to
+    60, 296 of 1024 frames get a label from a different instant
+
+Per training draw:
+
+  1. a target rate from a log-normal centred on `PEAK_FPS`, truncated to
+     `MIN_FPS`-`MAX_FPS`, so most draws stay near the corpus' own 25-30 fps and
+     a few reach either end
+  2. the video is cut into `k` equal tiles of `num_frames` frames at that rate,
+     `k` a whole number, the rate nudged just enough for the tiles to fit the
+     video exactly, and one tile is picked uniformly
+  3. `num_frames` poses are sampled evenly across the tile, each interpolated
+     linearly between the two nearest native frames. A keypoint missing in
+     either neighbour takes the nearer frame instead, so a missing hand is never
+     blended halfway towards the origin
+  4. timestamps and BIO labels are both computed from the same real times, so
+     each frame's label is what the gold says at the instant that pose shows
+
+Tiles rather than a random start: a fixed-length window started uniformly at
+random sees the first and last window of every video less often than its middle,
+and 23% of YouTube-SL-25's frames sit in those margins. Tiles partition the
+video, so each frame is inside the drawn window with probability exactly `1/k`;
+`sampling_weights` then gives each video `num_frames / E[1/k]`, the expectation
+over this same rate distribution, and every native frame in the corpus becomes
+equally likely to be seen.
+
+What stays fixed:
+
+  * a video with at least `num_frames` native frames always yields exactly
+    `num_frames`. A shorter one is resampled to fill `num_frames` if that needs
+    no more than `MAX_FPS` (or its own rate, if higher), otherwise to that rate
+    and padded as today — never below its native length
+  * evaluation: `load_window` refuses any split but training
+
+One inherited property: `preprocess_pose` centres and scales by shoulder
+statistics averaged over whatever frames were read, so a window covering more
+native frames is normalised over more of them. Upstream's downsampling has the
+same property; interpolation reads at most one frame beyond the tile.
+
+At a rate equal to the native rate and a video an exact multiple of `num_frames`
+long, the output is identical to upstream's un-augmented window, poses, times and
+labels alike — which is how this is tested.
+"""
+
+from __future__ import annotations
+
+import math
+import random
+from statistics import NormalDist
+
+import numpy as np
+
+#: target rates: log-normal with median `PEAK_FPS` — the peak on a log-fps axis,
+#: so doubling and halving the rate are equally likely — truncated to the range
+PEAK_FPS = 30.0
+LOG_SIGMA = 0.2
+MIN_FPS = 20.0
+MAX_FPS = 60.0
+
+#: rates at which `sampling_weights` evaluates the expectation over draws
+QUADRATURE = 1024
+
+#: range checks tolerate float error when a rate lands exactly on a bound
+_TOLERANCE = 1e-9
+
+
+def draw_rate(rng=random) -> float:
+    """One target rate. Rejection sampling; about 98% of draws are accepted.
+
+    Uses Python's `random`, which PyTorch reseeds in every DataLoader worker —
+    NumPy's global generator would repeat the same rates across workers.
+    """
+    while True:
+        rate = PEAK_FPS * math.exp(rng.gauss(0.0, LOG_SIGMA))
+        if MIN_FPS <= rate <= MAX_FPS:
+            return rate
+
+
+def rate_quantiles(count: int = QUADRATURE) -> np.ndarray:
+    """`count` evenly spaced quantiles of the distribution `draw_rate` samples."""
+    normal = NormalDist()
+    low = normal.cdf(math.log(MIN_FPS / PEAK_FPS) / LOG_SIGMA)
+    high = normal.cdf(math.log(MAX_FPS / PEAK_FPS) / LOG_SIGMA)
+    probs = low + (np.arange(count) + 0.5) / count * (high - low)
+    return PEAK_FPS * np.exp(LOG_SIGMA * np.array([normal.inv_cdf(p) for p in probs]))
+
+
+def plan(total_frames, fps, rate, num_frames: int):
+    """Number of tiles and the rate actually used, for a drawn target `rate`.
+
+    Vectorised over any broadcastable arrays, so the sampler weights and each
+    training draw go through this one function and cannot disagree.
+
+    `k` is whichever of the two whole numbers around `duration x rate /
+    num_frames` keeps the rate inside `MIN_FPS`-`MAX_FPS` and nearer the draw;
+    one of them always does. A video too short for even one window at the drawn
+    rate gets one tile, at the rate that fills `num_frames`, capped as described
+    in the module docstring.
+    """
+    total = np.asarray(total_frames, dtype=np.float64)
+    fps = np.asarray(fps, dtype=np.float64)
+    rate = np.asarray(rate, dtype=np.float64)
+
+    whole = num_frames * fps / total        # rate at which one window is the video
+    windows = rate / whole
+    below = np.maximum(np.floor(windows), 1.0)
+    above = np.maximum(np.ceil(windows), 1.0)
+    rate_below, rate_above = whole * below, whole * above
+
+    def fits(candidate):
+        return ((candidate >= MIN_FPS * (1 - _TOLERANCE))
+                & (candidate <= MAX_FPS * (1 + _TOLERANCE)))
+
+    nearer_above = np.abs(np.log(rate_above / rate)) < np.abs(np.log(rate_below / rate))
+    use_above = fits(rate_above) & (~fits(rate_below) | nearer_above)
+    tiles = np.where(use_above, above, below)
+    actual = whole * tiles
+
+    short = windows < 1.0
+    tiles = np.where(short, 1.0, tiles)
+    actual = np.where(short, np.minimum(np.maximum(MAX_FPS, fps), whole), actual)
+    return tiles.astype(np.int64), actual
+
+
+def window_length(total_frames: int, fps: float, tiles: int, actual: float,
+                  num_frames: int) -> int:
+    """Output frames: `num_frames`, unless a short video cannot fill it."""
+    return int(min(num_frames, round(total_frames * actual / (fps * tiles))))
+
+
+def sampling_weights(total_frames, fps, num_frames: int,
+                     chunk: int = 2048) -> np.ndarray:
+    """Per-video sampler weight making every native frame equally likely per draw.
+
+    A frame is in the drawn window with probability `weight / sum x E[1/k]`, so
+    the weight is `num_frames / E[1/k]`. The `num_frames` factor puts these on
+    the same scale as the frame counts un-augmented datasets are weighted by —
+    both then give every frame a chance of `num_frames / sum` — so the two can
+    share one sampler.
+    """
+    total = np.asarray(total_frames, dtype=np.float64)
+    fps = np.asarray(fps, dtype=np.float64)
+    rates = rate_quantiles()
+    inverse = np.empty(len(total))
+    for start in range(0, len(total), chunk):
+        stop = start + chunk
+        tiles, _ = plan(total[start:stop, None], fps[start:stop, None],
+                        rates[None, :], num_frames)
+        inverse[start:stop] = (1.0 / tiles).mean(axis=1)
+    return num_frames / inverse
+
+
+def load_window(pose_path: str, fps: float, total_frames: int,
+                signs: list[dict], sentences: list[dict], split,
+                num_frames: int, velocity: bool, frame_dropout: float,
+                body_part_dropout: float, rng=random) -> dict:
+    """One augmented training window, in the shape `load_and_augment` returns.
+
+    Frame dropout, body-part dropout and velocity follow upstream's code line
+    for line, applied after resampling as upstream applies them.
+    """
+    import torch
+    from pose_format import Pose
+
+    from sign_language_segmentation.utils.bio import create_bio_from_times
+    from sign_language_segmentation.utils.pose import (compute_velocity,
+                                                       preprocess_pose)
+
+    if str(split) != "train":
+        raise ValueError(f"frame-rate augmentation is training-only, got {split!r}")
+
+    tiles, actual = plan(total_frames, fps, draw_rate(rng), num_frames)
+    tiles, actual = int(tiles), float(actual)
+    length = window_length(total_frames, fps, tiles, actual, num_frames)
+    tile = rng.randrange(tiles)
+
+    # Positions in native-frame units. The tile spans `span` frame slots, frame m
+    # sitting at the centre of slot m, and samples sit at the centres of `length`
+    # equal sub-slots. Times keep the unclamped positions so they stay strictly
+    # increasing; only the pose lookup is held inside the video.
+    span = total_frames / tiles
+    positions = tile * span - 0.5 + (np.arange(length) + 0.5) * (span / length)
+    lookup = np.clip(positions, 0.0, total_frames - 1)
+    first = int(np.floor(lookup[0]))
+    last = int(np.ceil(lookup[-1]))
+
+    with open(pose_path, "rb", buffering=4 * 1024 * 1024) as handle:
+        pose = Pose.read(handle, start_frame=first, end_frame=last + 1)
+    pose = preprocess_pose(pose)
+    body = pose.body.data[:, 0, :, :3]
+    data = body.filled(0).astype(np.float32)
+    missing = np.ma.getmaskarray(body).any(axis=-1)
+
+    local = lookup - first
+    below = np.minimum(np.floor(local).astype(np.int64), len(data) - 1)
+    above = np.minimum(below + 1, len(data) - 1)
+    weight = (local - below).astype(np.float32)
+    poses = (data[below] * (1 - weight[:, None, None])
+             + data[above] * weight[:, None, None])
+    nearest = np.where(weight < 0.5, below, above)
+    gap = missing[below] | missing[above]
+    pose_data = np.where(gap[:, :, None], data[nearest], poses).astype(np.float32)
+
+    # float32 offsets over a Python float, as upstream computes `arange / fps`, so
+    # an un-resampled window reproduces its times bit for bit
+    frame_times = (positions - positions[0]).astype(np.float32) / fps
+    frame_times_ms = frame_times * 1000
+    actual_frames = length
+
+    if body_part_dropout > 0.0:
+        if rng.random() < body_part_dropout:
+            pose_data[:, 8:29, :] = 0
+        if rng.random() < body_part_dropout:
+            pose_data[:, 29:50, :] = 0
+
+    if frame_dropout > 0.0 and actual_frames > 2:
+        drop_rate = rng.uniform(0.0, frame_dropout)
+        n_drop = int((actual_frames - 2) * drop_rate)
+        if n_drop > 0:
+            drop = set(rng.sample(range(1, actual_frames - 1), n_drop))
+            keep = np.array([i not in drop for i in range(actual_frames)])
+            pose_data = pose_data[keep]
+            frame_times = frame_times[keep]
+            frame_times_ms = frame_times_ms[keep]
+
+    if velocity:
+        pose_data = np.concatenate(
+            [pose_data, compute_velocity(pose_data, frame_times)], axis=-1)
+
+    # spans relative to the first sample, clipped to the window as upstream does
+    start_ms = float(positions[0]) / fps * 1000
+    end_ms = (float(positions[0]) + span) / fps * 1000
+
+    def clip(spans):
+        return [{"start": max(0, s["start"] - start_ms),
+                 "end": min(end_ms - start_ms, s["end"] - start_ms)}
+                for s in spans if s["end"] > start_ms and s["start"] < end_ms]
+
+    return {
+        "pose": torch.from_numpy(pose_data),
+        "timestamps": torch.from_numpy(frame_times),
+        "bio": {
+            "sign": torch.from_numpy(create_bio_from_times(clip(signs), frame_times_ms)).long(),
+            "sentence": torch.from_numpy(create_bio_from_times(clip(sentences), frame_times_ms)).long(),
+        },
+    }
+
+
+def load_item(dataset, item: dict, rng=random) -> dict:
+    """`load_window` for one of a dataset adapter's items, with its settings."""
+    return load_window(
+        pose_path=item["pose_path"], fps=item["fps"],
+        total_frames=item["total_frames"], signs=item["glosses"],
+        sentences=item["sentences"], split=dataset.split,
+        num_frames=dataset.num_frames, velocity=dataset.velocity,
+        frame_dropout=dataset.frame_dropout,
+        body_part_dropout=dataset.body_part_dropout, rng=rng)

@@ -9,11 +9,12 @@ capacity fitting them.
 
 So rather than a hard switch — which the run would never be selected from, since
 all three pretraining runs picked a checkpoint at 16k-23k steps — each video's
-sampling weight decays smoothly from its frame count toward `FLOOR` times that,
-if and only if its timings fail `DEV_FILTER`. Clean videos keep full weight
-throughout.
+sampling weight decays smoothly from the sampler's starting weight — its frame
+count, or the tile-corrected weight under `--fps-aug on` — toward `FLOOR` times
+that, if and only if its timings fail `DEV_FILTER`. Clean videos keep full
+weight throughout.
 
-    weight(v, t) = frames(v) x (1 if clean(v) else 1 - (1 - FLOOR) x t/T)
+    weight(v, t) = base(v) x (1 if clean(v) else 1 - (1 - FLOOR) x t/T)
 
 At `FLOOR = 0.25` the clean share of drawn frames goes 41% -> 53% -> 74% across
 a run, averaging 54%, against a flat 41% today. Nothing is ever excluded: a floor
@@ -72,7 +73,9 @@ class SampleScheduleCallback(pl.Callback):
         if not rows:
             return False
         keep = yt.keep_ids({row["id"] for row in rows})
-        self.base = np.array([float(row["total_frames"]) for row in rows])
+        # the sampler's own starting weights, not frame counts: with --fps-aug on
+        # they are the tile-corrected weights, and replacing them would undo that
+        self.base = np.asarray(loader.sampler.weights, dtype=float).copy()
         self.clean = np.array([row["id"] in keep for row in rows])
         share = self.base[self.clean].sum() / max(self.base.sum(), 1.0)
         print(f"  sample schedule: {self.clean.sum():,}/{len(rows):,} videos "
