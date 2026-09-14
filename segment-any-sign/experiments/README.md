@@ -141,12 +141,13 @@ All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twi
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **#** | **run** | **change** | **step** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** |
 | — | Seq2Seq + attention (ACL SRW 2025)\* | reference | — | 0.60 | 0.62 | 0.95 | — | — | — | — | — | — | — | — | — |
-| 1 | `02_pretrain_youtube-2026.09.09` | DGS-measured inverse weights (O 1.8, B 269, I 2.3), 100k steps | 16,426 | 0.496 | 0.869 | 2.041 | 0.292 | 0.469 | 0.868 | 2.021 | 0.267 | 0.224 | 0.578 | 4.860 | 0.207 |
-| 2 | `02_pretrain_youtube-2026.09.10` | weights 2,20,1, 50k steps | 23,237 | 0.551 | 0.468 | 0.319 | 0.163 | 0.531 | 0.434 | 0.296 | 0.137 | 0.255 | 0.280 | 0.020 | 0.000 |
+| 1 | `02_pretrain_youtube-2026.09.09` | DGS-measured inverse weights (O 1.8, B 269, I 2.3), 100k steps | 16,426 | 0.496 | **0.869** | 2.041 | 0.292 | 0.469 | **0.868** | 2.021 | 0.267 | 0.224 | 0.578 | 4.860 | 0.207 |
+| 2 | `02_pretrain_youtube-2026.09.10` | weights 2,20,1, 50k steps | 23,237 | **0.551** | 0.468 | 0.319 | 0.163 | **0.531** | 0.434 | 0.296 | 0.137 | 0.255 | 0.280 | 0.020 | 0.000 |
 | 3 | `02_pretrain_youtube_b80-2026.09.10` | weights 2,80,1, 50k steps | 17,628 | 0.534 | 0.852 | 1.363 | 0.367 | 0.514 | 0.845 | 1.255 | 0.338 | 0.301 | 0.587 | 0.683 | 0.206 |
-| 4 | `02_pretrain_youtube_filtered-2026.09.12` | as 3, plus `--sample-schedule linear` (noisy videos 1.00 → 0.25), 40k steps, selected on filtered dev | 8,013 | 0.527 | 0.851 | 1.243 | 0.374 | 0.506 | 0.840 | 1.186 | 0.333 | 0.321 | 0.591 | 0.544 | 0.130 |
-| 5 | `02_pretrain_youtube_fpsaug-2026.09.13` | as 3, plus `--fps-aug on` (20-60 fps around 30), 40k steps | 17,228 | 0.540 | 0.861 | 1.142 | 0.372 | 0.520 | 0.856 | 1.062 | 0.340 | 0.270 | 0.586 | 0.740 | 0.215 |
-| 6 | `02_pretrain_youtube_fpsaug_fdrop-2026.09.13` | as 5, plus `--frame_dropout 0.15` (full window), 40k steps | 12,420 | 0.534 | 0.859 | 1.309 | 0.372 | 0.515 | 0.859 | 1.249 | 0.339 | 0.309 | 0.579 | 0.952 | 0.130 |
+| 4 | `02_pretrain_youtube_filtered-2026.09.12` | as 3, plus `--sample-schedule linear` (noisy videos 1.00 → 0.25), 40k steps, selected on filtered dev | 8,013 | 0.527 | 0.851 | 1.243 | 0.374 | 0.506 | 0.840 | 1.186 | 0.333 | **0.321** | **0.591** | 0.544 | 0.130 |
+| 5 | `02_pretrain_youtube_fpsaug-2026.09.13` | as 3, plus `--fps-aug on` (20-60 fps around 30), 40k steps | 17,228 | 0.540 | 0.861 | **1.142** | 0.372 | 0.520 | 0.856 | **1.062** | **0.340** | 0.270 | 0.586 | 0.740 | **0.215** |
+| 6 | `02_pretrain_youtube_fpsaug_fdrop-2026.09.13` | as 5, plus `--frame_dropout 0.15` (full window), 40k steps | 12,420 | 0.534 | 0.859 | 1.309 | 0.372 | 0.515 | 0.859 | 1.249 | 0.339 | 0.309 | 0.579 | **0.952** | 0.130 |
+| 7 | `02_pretrain_youtube_fpsaug_tempo-2026.09.13` | as 5, plus `--tempo-stretch on` (5%, clock at 24/30/60 fps), 40k steps | 9,615 | 0.538 | 0.858 | 1.154 | **0.378** | 0.519 | 0.844 | 1.121 | 0.339 | 0.297 | 0.581 | 0.570 | 0.104 |
 
 `step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run so far selected between 8k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
 
