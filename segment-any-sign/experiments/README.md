@@ -145,8 +145,10 @@ All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twi
 | 2 | `02_pretrain_youtube-2026.09.10` | weights 2,20,1, 50k steps | 23,237 | 0.551 | 0.468 | 0.319 | 0.163 | 0.531 | 0.434 | 0.296 | 0.137 | 0.255 | 0.280 | 0.020 | 0.000 |
 | 3 | `02_pretrain_youtube_b80-2026.09.10` | weights 2,80,1, 50k steps | 17,628 | 0.534 | 0.852 | 1.363 | 0.367 | 0.514 | 0.845 | 1.255 | 0.338 | 0.301 | 0.587 | 0.683 | 0.206 |
 | 4 | `02_pretrain_youtube_filtered-2026.09.12` | as 3, plus `--sample-schedule linear` (noisy videos 1.00 → 0.25), 40k steps, selected on filtered dev | 8,013 | 0.527 | 0.851 | 1.243 | 0.374 | 0.506 | 0.840 | 1.186 | 0.333 | 0.321 | 0.591 | 0.544 | 0.130 |
+| 5 | `02_pretrain_youtube_fpsaug-2026.09.13` | as 3, plus `--fps-aug on` (20-60 fps around 30), 40k steps | 17,228 | 0.540 | 0.861 | 1.142 | 0.372 | 0.520 | 0.856 | 1.062 | 0.340 | 0.270 | 0.586 | 0.740 | 0.215 |
+| 6 | `02_pretrain_youtube_fpsaug_fdrop-2026.09.13` | as 5, plus `--frame_dropout 0.15` (full window), 40k steps | 12,420 | 0.534 | 0.859 | 1.309 | 0.372 | 0.515 | 0.859 | 1.249 | 0.339 | 0.309 | 0.579 | 0.952 | 0.130 |
 
-`step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — runs 1–3 selected between 16k and 23k and run 4 at 8k, so the back half of each bought nothing. `%` is best nearest **1**.
+`step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run so far selected between 8k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
 
 **Filtering the dev set moves every number up**: frame F1 by about 0.02 and mF1S by 0.025–0.041 across all four runs, which is what scoring against labels that are less wrong should do. It keeps the ranking of runs 1–3; runs 3 and 4 swap on mF1S (filtered 0.367 vs 0.374, raw 0.338 vs 0.333), a gap inside the selection asymmetry described below.
 

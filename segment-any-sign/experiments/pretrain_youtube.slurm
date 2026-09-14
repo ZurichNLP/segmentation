@@ -22,7 +22,7 @@
 #     sbatch --job-name=02_pretrain_youtube_b40 \
 #            experiments/pretrain_youtube.slurm 2,40,1 _b40 off "weights 2,40,1"
 #
-# Six positional arguments, all optional, in order:
+# Seven positional arguments, all optional, in order:
 #   1. the O,B,I class weights
 #   2. a suffix for the run name
 #   3. the sampling schedule (off, linear, cosine) that decays the weight of
@@ -34,6 +34,8 @@
 #      20-60 fps around 30, always 1024 frames (experiments/fps_augment.py)
 #   6. tempo stretch, off or on: in 5% of training windows the timestamps RoPE
 #      reads run at 24, 30 or 60 fps; poses and labels are unchanged
+#   7. frame dropout, the upper bound of each window's drop rate (default 0.0).
+#      The window is widened first, so it still holds 1024 frames
 #
 # Selection is on raw YouTube dev; the filtered score is reported after
 # training. The suffix is what keeps parallel runs apart — same day, same
@@ -66,7 +68,8 @@ SUFFIX="${2:-}"            # appended to the run name, e.g. _b100
 SCHEDULE="${3:-off}"       # off | linear | cosine
 FPS_AUG="${5:-off}"        # off | on (experiments/fps_augment.py)
 TEMPO="${6:-off}"          # off | on (tempo stretch, experiments/fps_augment.py)
-NOTE="${4:-weights ${WEIGHTS}, schedule ${SCHEDULE}, fps aug ${FPS_AUG}, tempo ${TEMPO}, 40k steps}"   # README `change` column
+FRAME_DROPOUT="${7:-0.0}"  # upper bound of the per-window drop rate; windows stay full
+NOTE="${4:-weights ${WEIGHTS}, schedule ${SCHEDULE}, fps aug ${FPS_AUG}, tempo ${TEMPO}, frame dropout ${FRAME_DROPOUT}, 40k steps}"   # README `change` column
 
 REPO=/home/zifjia/segmentation/segment-any-sign
 PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
@@ -74,7 +77,7 @@ PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
 mkdir -p /scratch/zifjia/segment-any-sign/slurm
 cd "$REPO"
 
-echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   fps aug ${FPS_AUG}   tempo ${TEMPO}   run 02_pretrain_youtube${SUFFIX}"
+echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   fps aug ${FPS_AUG}   tempo ${TEMPO}   frame dropout ${FRAME_DROPOUT}   run 02_pretrain_youtube${SUFFIX}"
 echo "node       $(hostname)"
 echo "job        ${SLURM_JOB_ID:-none}  cpus ${SLURM_CPUS_PER_TASK:-?}"
 echo "commit     $(git rev-parse --short HEAD)$(git diff --quiet || echo ' (dirty)')"
@@ -109,7 +112,7 @@ srun "$PYTHON" experiments/train.py \
     --optimizer adamw-onecycle \
     --num_frames 1024 \
     --dice_loss_weight 0.0 \
-    --frame_dropout 0.0 \
+    --frame_dropout "${FRAME_DROPOUT}" \
     --body_part_dropout 0.0 \
     --attn_dropout 0.0 \
     --device gpu --gpus 1 \
