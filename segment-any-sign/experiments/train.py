@@ -7,19 +7,21 @@ filters and gold that [`../benchmark/`](../benchmark/) scores, and then calls
 `sign_language_segmentation.train.train()` unchanged.
 
 Every hyperparameter is upstream's `args.py`; anything not passed keeps its 2026
-default **except** for the basic-baseline overrides below, each chosen so that a
-later experiment turns exactly one trick back on:
+default **except** for the overrides below. Augmentation and all three dropouts
+are on by default since 2026-09-15 — the recipe of pretraining run 9, whose
+curves held up best as a regulariser; pass the flags to turn any of them off:
 
-    --batch_size 64          (upstream 8)      --dice_loss_weight 0   (1.5)
-    --epochs 500             (200)             --frame_dropout 0      (0.15)
-    --learning_rate 1e-3     (1e-3, pinned)    --body_part_dropout 0  (0.1)
-    velocity off             (on, unswitchable) --attn_dropout 0      (0.1)
-    fps_aug off              (on, unswitchable) early stopping off     (patience 10)
+    --batch_size 64          (upstream 8)      --dice_loss_weight 0      (1.5)
+    --epochs 500             (200)             --frame_dropout 0.15      (0.15, pinned)
+    --learning_rate 1e-3     (1e-3, pinned)    --body_part_dropout 0.1   (0.1, pinned)
+    velocity off             (on, unswitchable) --attn_dropout 0.1       (0.1, pinned)
+    --fps-aug on, --tempo-stretch on  (ours)   early stopping off        (patience 10)
 
 `--fps-aug on` is our frame-rate augmentation, `experiments/fps_augment.py`, not
 upstream's `fps_aug`, whose tempo branch labels frames from the wrong instant.
 Upstream's stays off, and the label rule is the same either way (see the
-`create_bio` shim below).
+`create_bio` shim below). Frame dropout and tempo stretch go through the same
+module, so no trick can move a frame against its label.
 
 These flags are ours and are stripped before upstream parses:
 
@@ -142,17 +144,19 @@ def main() -> None:
                            "default: OneCycle anneals over --epochs, so stopping "
                            "early leaves the schedule near peak LR and never "
                            "visits its low-LR phase")
-    ours.add_argument("--fps-aug", choices=["on", "off"], default="off",
+    ours.add_argument("--fps-aug", choices=["on", "off"], default="on",
                       help="resample each training window to a rate drawn "
                            "around 30 fps within 20-60, always num_frames long, "
                            "every frame equally likely to be seen. Ours, in "
-                           "experiments/fps_augment.py; upstream's is never used")
-    ours.add_argument("--tempo-stretch", choices=["on", "off"], default="off",
+                           "experiments/fps_augment.py; upstream's is never used. "
+                           "On by default since 2026-09-15")
+    ours.add_argument("--tempo-stretch", choices=["on", "off"], default="on",
                       help="upstream's tempo stretch with correct labels: in 5%% "
                            "of training windows the timestamps are rescaled to "
                            "run at 24, 30 or 60 fps. Only the clock RoPE reads "
                            "changes; poses and labels keep their real times. "
-                           "Works with or without --fps-aug")
+                           "Works with or without --fps-aug. On by default since "
+                           "2026-09-15")
     ours.add_argument("--class-weights", default="auto",
                       help="loss class weighting. auto (default) = 2023's inverse "
                            "class frequency when dice is off, unweighted when it "
@@ -361,9 +365,11 @@ def main() -> None:
         # each run never improved the selection metric. See README.md.
         mine.max_steps = 40000 if pretraining else 5000
 
-    # Defaults describe the *basic baseline*: every optional trick off, so each
-    # later experiment turns exactly one back on. This deliberately departs from
-    # upstream's defaults — see README.md — and each departure is listed here.
+    # Defaults describe the current recipe, and each is pinned here even where it
+    # matches upstream, so an upstream change cannot move it silently. The three
+    # dropouts were 0 for the basic baseline and the learning-rate sweep; since
+    # 2026-09-15 they are upstream's values, with --fps-aug and --tempo-stretch on
+    # — pretraining run 9. Dice stays off. See README.md.
     #
     # Batch 64: measured activations are 0.33 GiB per sample at 1024 frames, so
     # ~36 GiB peak. Fine on an 80GB A100, tight on a 40GB one. It also leaves
@@ -373,8 +379,8 @@ def main() -> None:
     # other, and 1e-3 leads on IoU. Pinning keeps an upstream change from moving
     # it silently. See README.md.
     basic = {"batch_size": 64, "epochs": 500, "learning_rate": 1e-3,
-             "dice_loss_weight": 0.0, "frame_dropout": 0.0,
-             "body_part_dropout": 0.0, "attn_dropout": 0.0}
+             "dice_loss_weight": 0.0, "frame_dropout": 0.15,
+             "body_part_dropout": 0.1, "attn_dropout": 0.1}
     for key, value in basic.items():
         if f"--{key}" not in rest:
             setattr(args, key, value)
@@ -856,7 +862,7 @@ def report_effective_config(args, mine, run_name: str) -> None:
              if mine.accumulate > 1 else "")
           + f"  epochs {args.epochs}  "
           f"patience {args.patience}  lr {args.learning_rate:g}  {args.optimizer}"
-          f"\n  tricks OFF  dice {args.dice_loss_weight:g}  "
+          f"\n  regularise  dice {args.dice_loss_weight:g}  "
           f"frame_dropout {args.frame_dropout:g}  "
           f"body_part_dropout {args.body_part_dropout:g}  "
           f"attn_dropout {args.attn_dropout:g}  velocity {args.velocity}"

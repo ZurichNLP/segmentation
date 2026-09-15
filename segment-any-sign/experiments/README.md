@@ -75,6 +75,8 @@ Read off both codebases (`v2023 src/` and `main sign_language_segmentation/`). T
 
 Filled in as runs land. **Validation numbers**, scored by `benchmark/score.py` through the same protocol the benchmark uses. Ablations stay on dev.
 
+The runs below trained with every trick off, the defaults of the time. Since 2026-09-15 `train.py` defaults to `--fps-aug on`, `--tempo-stretch on`, frame dropout 0.15, body-part dropout 0.1 and attention dropout 0.1 (see [Runs](#runs)), so a new DGS run gets them too unless it passes the flags to turn them off.
+
 The 2026 shipped checkpoint is the reference, not a row we produced.
 
 | | | Sign | | | | | Phrase | | | | |
@@ -148,8 +150,12 @@ All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twi
 | 5 | `02_pretrain_youtube_fpsaug-2026.09.13` | as 3, plus `--fps-aug on` (20-60 fps around 30), 40k steps | 17,228 | 0.540 | 0.861 | **1.142** | 0.372 | 0.520 | 0.856 | **1.062** | **0.340** | 0.270 | 0.586 | 0.740 | **0.215** |
 | 6 | `02_pretrain_youtube_fpsaug_fdrop-2026.09.13` | as 5, plus `--frame_dropout 0.15` (full window), 40k steps | 12,420 | 0.534 | 0.859 | 1.309 | 0.372 | 0.515 | 0.859 | 1.249 | 0.339 | 0.309 | 0.579 | **0.952** | 0.130 |
 | 7 | `02_pretrain_youtube_fpsaug_tempo-2026.09.13` | as 5, plus `--tempo-stretch on` (5%, clock at 24/30/60 fps), 40k steps | 9,615 | 0.538 | 0.858 | 1.154 | **0.378** | 0.519 | 0.844 | 1.121 | 0.339 | 0.297 | 0.581 | 0.570 | 0.104 |
+| 8 | `02_pretrain_youtube_frame_combo-2026.09.14` | as 5, plus `--tempo-stretch on` and `--frame_dropout 0.15` (full window), 40k steps | 17,629 | 0.541 | 0.865 | 1.266 | 0.361 | 0.522 | 0.851 | 1.158 | 0.326 | 0.322 | 0.580 | 0.850 | 0.208 |
+| 9 | `02_pretrain_youtube_frame_combo_hand_attn-2026.09.14` | as 8, plus `--body_part_dropout 0.1` and `--attn_dropout 0.1`, 40k steps | 15,225 | 0.532 | 0.854 | 1.266 | 0.370 | 0.515 | 0.851 | 1.190 | 0.340 | 0.282 | 0.544 | 0.803 | 0.177 |
 
 `step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run so far selected between 8k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
+
+**Defaults since 2026-09-15 are row 9's recipe**: `--fps-aug on`, `--tempo-stretch on`, frame dropout 0.15, body-part dropout 0.1 and attention dropout 0.1, in both `train.py` and `pretrain_youtube.slurm`. Rows 1–9 each spell out what they turned on, so they read the same as before; any run launched after this without those flags gets the recipe.
 
 **Filtering the dev set moves every number up**: frame F1 by about 0.02 and mF1S by 0.025–0.041 across all four runs, which is what scoring against labels that are less wrong should do. It keeps the ranking of runs 1–3; runs 3 and 4 swap on mF1S (filtered 0.367 vs 0.374, raw 0.338 vs 0.333), a gap inside the selection asymmetry described below.
 

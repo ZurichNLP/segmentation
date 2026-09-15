@@ -14,7 +14,7 @@
 #
 # Stage one: subtitle-supervised phrase pretraining on YouTube-SL-25.
 #
-#     sbatch experiments/pretrain_youtube.slurm                     # 2,20,1
+#     sbatch experiments/pretrain_youtube.slurm                     # 2,80,1
 #     sbatch --job-name=02_pretrain_youtube_b100 \
 #            experiments/pretrain_youtube.slurm 2,100,1 _b100
 #     sbatch --job-name=02_pretrain_youtube_filtered \
@@ -22,7 +22,9 @@
 #     sbatch --job-name=02_pretrain_youtube_b40 \
 #            experiments/pretrain_youtube.slurm 2,40,1 _b40 off "weights 2,40,1"
 #
-# Seven positional arguments, all optional, in order:
+# Nine positional arguments, all optional, in order. Augmentation and all three
+# dropouts default to on since 2026-09-15 (run 9's recipe); pass off / 0.0 to
+# turn one off:
 #   1. the O,B,I class weights
 #   2. a suffix for the run name
 #   3. the sampling schedule (off, linear, cosine) that decays the weight of
@@ -30,12 +32,15 @@
 #      experiments/README.md found no gain
 #   4. a note for the `change` column of the row the run adds to
 #      experiments/README.md when it finishes; defaults to weights and schedule
-#   5. frame-rate augmentation, off or on: each training window resampled to
-#      20-60 fps around 30, always 1024 frames (experiments/fps_augment.py)
-#   6. tempo stretch, off or on: in 5% of training windows the timestamps RoPE
-#      reads run at 24, 30 or 60 fps; poses and labels are unchanged
-#   7. frame dropout, the upper bound of each window's drop rate (default 0.0).
+#   5. frame-rate augmentation, on or off (default on): each training window
+#      resampled to 20-60 fps around 30, always 1024 frames
+#      (experiments/fps_augment.py)
+#   6. tempo stretch, on or off (default on): in 5% of training windows the
+#      timestamps RoPE reads run at 24, 30 or 60 fps; poses and labels unchanged
+#   7. frame dropout, the upper bound of each window's drop rate (default 0.15).
 #      The window is widened first, so it still holds 1024 frames
+#   8. body-part dropout, the chance each hand is zeroed per window (default 0.1)
+#   9. attention dropout (default 0.1)
 #
 # Selection is on raw YouTube dev; the filtered score is reported after
 # training. The suffix is what keeps parallel runs apart — same day, same
@@ -63,13 +68,15 @@
 
 set -euo pipefail
 
-WEIGHTS="${1:-2,20,1}"     # O,B,I
+WEIGHTS="${1:-2,80,1}"     # O,B,I; every run since row 3 of the README table
 SUFFIX="${2:-}"            # appended to the run name, e.g. _b100
 SCHEDULE="${3:-off}"       # off | linear | cosine
-FPS_AUG="${5:-off}"        # off | on (experiments/fps_augment.py)
-TEMPO="${6:-off}"          # off | on (tempo stretch, experiments/fps_augment.py)
-FRAME_DROPOUT="${7:-0.0}"  # upper bound of the per-window drop rate; windows stay full
-NOTE="${4:-weights ${WEIGHTS}, schedule ${SCHEDULE}, fps aug ${FPS_AUG}, tempo ${TEMPO}, frame dropout ${FRAME_DROPOUT}, 40k steps}"   # README `change` column
+FPS_AUG="${5:-on}"         # on | off (experiments/fps_augment.py)
+TEMPO="${6:-on}"           # on | off (tempo stretch, experiments/fps_augment.py)
+FRAME_DROPOUT="${7:-0.15}" # upper bound of the per-window drop rate; windows stay full
+BODY_PART_DROPOUT="${8:-0.1}"
+ATTN_DROPOUT="${9:-0.1}"
+NOTE="${4:-weights ${WEIGHTS}, schedule ${SCHEDULE}, fps aug ${FPS_AUG}, tempo ${TEMPO}, frame dropout ${FRAME_DROPOUT}, body-part dropout ${BODY_PART_DROPOUT}, attention dropout ${ATTN_DROPOUT}, 40k steps}"   # README `change` column
 
 REPO=/home/zifjia/segmentation/segment-any-sign
 PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
@@ -77,7 +84,8 @@ PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
 mkdir -p /scratch/zifjia/segment-any-sign/slurm
 cd "$REPO"
 
-echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   fps aug ${FPS_AUG}   tempo ${TEMPO}   frame dropout ${FRAME_DROPOUT}   run 02_pretrain_youtube${SUFFIX}"
+echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   fps aug ${FPS_AUG}   tempo ${TEMPO}   run 02_pretrain_youtube${SUFFIX}"
+echo "dropout    frame ${FRAME_DROPOUT}   body part ${BODY_PART_DROPOUT}   attention ${ATTN_DROPOUT}"
 echo "node       $(hostname)"
 echo "job        ${SLURM_JOB_ID:-none}  cpus ${SLURM_CPUS_PER_TASK:-?}"
 echo "commit     $(git rev-parse --short HEAD)$(git diff --quiet || echo ' (dirty)')"
@@ -113,7 +121,7 @@ srun "$PYTHON" experiments/train.py \
     --num_frames 1024 \
     --dice_loss_weight 0.0 \
     --frame_dropout "${FRAME_DROPOUT}" \
-    --body_part_dropout 0.0 \
-    --attn_dropout 0.0 \
+    --body_part_dropout "${BODY_PART_DROPOUT}" \
+    --attn_dropout "${ATTN_DROPOUT}" \
     --device gpu --gpus 1 \
     --max_time 01:11:00:00
