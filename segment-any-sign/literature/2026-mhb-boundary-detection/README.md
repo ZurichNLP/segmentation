@@ -17,7 +17,7 @@ Note **Carol Neidle** is an author on the workshop version. She leads the ASLLRP
 
 - **Our task, our framing:** frame-level BIO (plus a padding class), citing Moryossef et al. (2023) for BIO over IO (§3.1).
 - **Model:** 27-joint AlphaPose skeletons with velocity and acceleration → 10 ST-GCN layers → joint pooling → 2 temporal convs → per-frame labels.
-- **Loss:** weighted CE (boundary frames up-weighted) + λ·|#pred − #gold boundaries| per utterance. How the count term is made differentiable is not stated.
+- **Loss:** weighted CE (boundary frames up-weighted) + `λ · |N_pred − N_gold|`, the gap in boundary counts per utterance. How the count term is made differentiable is not stated.
 - **Handshape prior:** a 3-layer GCN over hand joints, pretrained on 87 NCSLGR handshape categories (NCSLGR handshape videos + ASLLVD, DSP, ASLLRP-S frames), fused into the segmenter by gated cross-attention.
 - **Downstream:** predicted segments go to an isolated-sign recogniser (Zhou et al., 2024) to show segmentation is useful.
 - **Scope:** dominant-hand signs only; "hidden" signs (false starts, heavy deviations) kept for segmentation, dropped for recognition.
