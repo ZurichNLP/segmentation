@@ -10,7 +10,7 @@ One folder per paper named in the [project README](../README.md), each with a sh
 | [2025-sage](2025-sage/) | ICCVW 2025 | segmentation used for efficient translation | | |
 | [2025-segment-embed-align](2025-segment-embed-align/) | arXiv 2025 | ours — segmentation for subtitle alignment | author | |
 | [2026-mhb-boundary-detection](2026-mhb-boundary-detection/) | sign-lang@LREC 2026 | ASL boundary detection, evaluated on ASLLRP | | |
-| [2026-lsf-lsm-weakly-aligned](2026-lsf-lsm-weakly-aligned/) | sign-lang@LREC 2026 | our models applied to LSF and LSM | | |
+| [2026-lsf-lsm-weakly-aligned](2026-lsf-lsm-weakly-aligned/) | sign-lang@LREC 2026 | our models applied to LSF and LSM | ✅ | |
 | [sam-series](sam-series/) | 2023–2025 | related work: SAM 1/2/3, the Meta series | | |
 | [segment-any-text](segment-any-text/) | EMNLP 2024 | related work: universal sentence segmentation | ✅ | |
 
