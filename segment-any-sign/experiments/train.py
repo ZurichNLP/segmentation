@@ -1133,7 +1133,8 @@ def dry_run(args) -> None:
 
     model.eval()
     with torch.no_grad():
-        out = model(batch["pose"], timestamps=batch.get("timestamps"))
+        out = model(batch["pose"], timestamps=batch.get("timestamps"),
+                    lengths=batch.get("lengths"))
     print(f"forward        sign {tuple(out['sign'].shape)}  "
           f"sentence {tuple(out['sentence'].shape)}")
 

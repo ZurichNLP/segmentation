@@ -18,7 +18,7 @@ flowchart LR
     D --> F
 ```
 
-The two temporal U-Nets learn progressively wider local motion patterns while restoring the original frame rate after each block. Together they give each frame an approximately 331-frame receptive field (about 6.6 seconds at 50 fps). The Transformer then relates every frame to the complete training window. Both heads retain the original temporal resolution and predict one BIO distribution per input frame. Full validation and test videos are processed as independent 1024-frame Transformer chunks.
+The two temporal U-Nets learn progressively wider local motion patterns while restoring the original frame rate after each block. Together they give each frame an approximately 331-frame receptive field (about 6.6 seconds at 50 fps). The Transformer then relates every frame to the complete training window. Both heads retain the original temporal resolution and predict one BIO distribution per input frame. Full validation and test videos are processed as independent 1024-frame Transformer chunks, the last one padded, with padding masked throughout the model ([`masked_model.py`](masked_model.py)).
 
 ## Rules
 
@@ -83,7 +83,7 @@ The 2026 shipped checkpoint is the reference, not a row we produced.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | **Run** | **Change** | **F1-ma** | **F1-mi** | **IoU** | **%** | **mF1S** | **F1-ma** | **F1-mi** | **IoU** | **%** | **mF1S** |
 | *— baselines —* | | | | | | | | | | | |
-| 2026 shipped | reference | **0.525** | **0.812** | **0.610** | **0.974** | **0.495** | 0.476 | 0.888 | 0.793 | 0.553 | 0.051 |
+| 2026 shipped | reference | **0.525** | **0.812** | **0.610** | **0.970** | **0.496** | 0.476 | 0.888 | 0.793 | 0.549 | 0.051 |
 | `00_2026_baseline` | all tricks on, batch 32, lr 1e-3 | 0.510 | 0.800 | 0.598 | 1.067 | 0.465 | **0.515** | **0.905** | **0.822** | **0.744** | **0.204** |
 | *— learning-rate sweep —* | | | | | | | | | | | |
 | `01_basic_lr1e-2` | all tricks off, batch 64 | 0.450 | 0.746 | 0.430 | 1.356 | 0.230 | 0.513 | 0.892 | 0.787 | 2.082 | 0.106 |
@@ -99,11 +99,13 @@ The 2026 shipped checkpoint is the reference, not a row we produced.
 
 Bold marks the best within each group; `%` is best nearest **1**. Predictions live in `experiments/predictions/` (dev), kept apart from `benchmark/predictions/` (test) so the two can never be scored together.
 
+**Padding is masked at evaluation** ([`masked_model.py`](masked_model.py)): a long clip's last 1024-frame chunk is padded and the padding masked, where it used to end at the final frame instead. The 2026 shipped row is re-scored that way. The `00` and `01` rows are not: their numbers predate `--decode` and used the B-ignoring decoder, so re-scoring them now would change the decoder too. Measured on all 12 models under today's decoder, masking moves their F1, IoU and mF1S by at most 0.002 and `%` by at most 0.004.
+
 ### Baselines
 
 The 2026 shipped checkpoint against the same architecture trained by us — all tricks on, batch 32, lr 1e-3, 500 epochs, no hyperparameter search, selected on `validation_mean_mf1s` rather than IoU.
 
-**The two split perfectly by level**: shipped takes every Sign column, ours takes every Phrase column. Phrase `%` goes 0.553 → 0.744 and phrase mF1S 0.051 → 0.204, while sign IoU slips 0.610 → 0.598. Which half of that is the selection metric and which is our training is not yet separated — that needs a run selected on `hm_iou` under otherwise identical settings.
+**The two split perfectly by level**: shipped takes every Sign column, ours takes every Phrase column. Phrase `%` goes 0.549 → 0.744 and phrase mF1S 0.051 → 0.204, while sign IoU slips 0.610 → 0.598. Which half of that is the selection metric and which is our training is not yet separated — that needs a run selected on `hm_iou` under otherwise identical settings.
 
 ### Learning-rate sweep
 
@@ -143,27 +145,30 @@ All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twi
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **#** | **run** | **change** | **step** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** |
 | — | Seq2Seq + attention (ACL SRW 2025)\* | reference | — | 0.60 | 0.62 | 0.95 | — | — | — | — | — | — | — | — | — |
-| 1 | `02_pretrain_youtube-2026.09.09` | DGS-measured inverse weights (O 1.8, B 269, I 2.3), 100k steps | 16,426 | 0.496 | **0.869** | 2.041 | 0.292 | 0.469 | **0.868** | 2.021 | 0.267 | 0.224 | 0.578 | 4.860 | 0.207 |
-| 2 | `02_pretrain_youtube-2026.09.10` | weights 2,20,1, 50k steps | 23,237 | **0.551** | 0.468 | 0.319 | 0.163 | **0.531** | 0.434 | 0.296 | 0.137 | 0.255 | 0.280 | 0.020 | 0.000 |
-| 3 | `02_pretrain_youtube_b80-2026.09.10` | weights 2,80,1, 50k steps | 17,628 | 0.534 | 0.852 | 1.363 | 0.367 | 0.514 | 0.845 | 1.255 | 0.338 | 0.301 | 0.587 | 0.683 | 0.206 |
-| 4 | `02_pretrain_youtube_filtered-2026.09.12` | as 3, plus `--sample-schedule linear` (noisy videos 1.00 → 0.25), 40k steps, selected on filtered dev | 8,013 | 0.527 | 0.851 | 1.243 | 0.374 | 0.506 | 0.840 | 1.186 | 0.333 | **0.321** | **0.591** | 0.544 | 0.130 |
-| 5 | `02_pretrain_youtube_fpsaug-2026.09.13` | as 3, plus `--fps-aug on` (20-60 fps around 30), 40k steps | 17,228 | 0.540 | 0.861 | **1.142** | 0.372 | 0.520 | 0.856 | **1.062** | **0.340** | 0.270 | 0.586 | 0.740 | **0.215** |
-| 6 | `02_pretrain_youtube_fpsaug_fdrop-2026.09.13` | as 5, plus `--frame_dropout 0.15` (full window), 40k steps | 12,420 | 0.534 | 0.859 | 1.309 | 0.372 | 0.515 | 0.859 | 1.249 | 0.339 | 0.309 | 0.579 | **0.952** | 0.130 |
-| 7 | `02_pretrain_youtube_fpsaug_tempo-2026.09.13` | as 5, plus `--tempo-stretch on` (5%, clock at 24/30/60 fps), 40k steps | 9,615 | 0.538 | 0.858 | 1.154 | **0.378** | 0.519 | 0.844 | 1.121 | 0.339 | 0.297 | 0.581 | 0.570 | 0.104 |
-| 8 | `02_pretrain_youtube_frame_combo-2026.09.14` | as 5, plus `--tempo-stretch on` and `--frame_dropout 0.15` (full window), 40k steps | 17,629 | 0.541 | 0.865 | 1.266 | 0.361 | 0.522 | 0.851 | 1.158 | 0.326 | 0.322 | 0.580 | 0.850 | 0.208 |
-| 9 | `02_pretrain_youtube_frame_combo_hand_attn-2026.09.14` | as 8, plus `--body_part_dropout 0.1` and `--attn_dropout 0.1`, 40k steps | 15,225 | 0.532 | 0.854 | 1.266 | 0.370 | 0.515 | 0.851 | 1.190 | 0.340 | 0.282 | 0.544 | 0.803 | 0.177 |
+| 1 | `02_pretrain_youtube-2026.09.09` | DGS-measured inverse weights (O 1.8, B 269, I 2.3), 100k steps | 16,426 | 0.490 | **0.868** | 2.001 | 0.294 | 0.464 | **0.866** | 1.998 | 0.268 | 0.224 | 0.578 | 4.863 | 0.206 |
+| 2 | `02_pretrain_youtube-2026.09.10` | weights 2,20,1, 50k steps | 23,237 | **0.552** | 0.463 | 0.309 | 0.161 | **0.531** | 0.434 | 0.289 | 0.136 | 0.255 | 0.280 | 0.020 | 0.000 |
+| 3 | `02_pretrain_youtube_b80-2026.09.10` | weights 2,80,1, 50k steps | 17,628 | 0.530 | 0.852 | 1.301 | 0.370 | 0.510 | 0.845 | 1.204 | **0.341** | 0.299 | 0.588 | 0.684 | 0.206 |
+| 4 | `02_pretrain_youtube_filtered-2026.09.12` | as 3, plus `--sample-schedule linear` (noisy videos 1.00 → 0.25), 40k steps, selected on filtered dev | 8,013 | 0.527 | 0.852 | 1.230 | 0.375 | 0.506 | 0.840 | 1.176 | 0.333 | 0.320 | **0.591** | 0.535 | 0.130 |
+| 5 | `02_pretrain_youtube_fpsaug-2026.09.13` | as 3, plus `--fps-aug on` (20-60 fps around 30), 40k steps | 17,228 | 0.541 | 0.863 | **1.091** | 0.374 | 0.521 | 0.857 | **1.029** | **0.341** | 0.270 | 0.586 | 0.736 | 0.215 |
+| 6 | `02_pretrain_youtube_fpsaug_fdrop-2026.09.13` | as 5, plus `--frame_dropout 0.15` (full window), 40k steps | 12,420 | 0.534 | 0.861 | 1.285 | 0.373 | 0.515 | 0.860 | 1.226 | 0.340 | 0.308 | 0.579 | **0.959** | 0.131 |
+| 7 | `02_pretrain_youtube_fpsaug_tempo-2026.09.13` | as 5, plus `--tempo-stretch on` (5%, clock at 24/30/60 fps), 40k steps | 9,615 | 0.538 | 0.859 | 1.140 | **0.380** | 0.519 | 0.845 | 1.113 | 0.340 | 0.296 | 0.581 | 0.571 | 0.103 |
+| 8 | `02_pretrain_youtube_frame_combo-2026.09.14` | as 5, plus `--tempo-stretch on` and `--frame_dropout 0.15` (full window), 40k steps | 17,629 | 0.542 | 0.865 | 1.226 | 0.364 | 0.522 | 0.851 | 1.129 | 0.328 | **0.321** | 0.578 | 0.873 | 0.207 |
+| 9 | `02_pretrain_youtube_frame_combo_hand_attn-2026.09.14` | as 8, plus `--body_part_dropout 0.1` and `--attn_dropout 0.1`, 40k steps | 15,225 | 0.532 | 0.854 | 1.245 | 0.371 | 0.516 | 0.851 | 1.171 | **0.341** | 0.281 | 0.544 | 0.810 | 0.175 |
+| 10 | `02_pretrain_youtube_padding_refactor-2026.09.15` | as 9, plus padding masked end to end ([`masked_model.py`](masked_model.py)), 40k steps | 14,824 | 0.533 | 0.843 | 1.141 | 0.373 | 0.516 | 0.829 | 1.090 | 0.338 | 0.298 | 0.588 | 0.942 | **0.246** |
 
 `step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run so far selected between 8k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
 
 **Defaults since 2026-09-15 are row 9's recipe**: `--fps-aug on`, `--tempo-stretch on`, frame dropout 0.15, body-part dropout 0.1 and attention dropout 0.1, in both `train.py` and `pretrain_youtube.slurm`. Rows 1–9 each spell out what they turned on, so they read the same as before; any run launched after this without those flags gets the recipe.
 
-**Filtering the dev set moves every number up**: frame F1 by about 0.02 and mF1S by 0.025–0.041 across all four runs, which is what scoring against labels that are less wrong should do. It keeps the ranking of runs 1–3; runs 3 and 4 swap on mF1S (filtered 0.367 vs 0.374, raw 0.338 vs 0.333), a gap inside the selection asymmetry described below.
+**Filtering the dev set moves every number up**: frame F1 by about 0.02 and mF1S by 0.025–0.042 across all runs, which is what scoring against labels that are less wrong should do. It keeps the ranking of runs 1–3; runs 3 and 4 swap on mF1S (filtered 0.370 vs 0.375, raw 0.341 vs 0.333), a gap inside the selection asymmetry described below.
 
-Both YouTube columns come from [`eval_youtube.py`](eval_youtube.py) on the written checkpoint, and DGS from `benchmark/score.py` on written predictions; all three call the same [`../metrics/`](../metrics/) code and the same decoder. The scorer reproduces the training-time numbers for run 3 to three decimals, which is the check that matters since the two paths share no code above `metrics/`.
+Both YouTube columns come from [`eval_youtube.py`](eval_youtube.py) on the written checkpoint, and DGS from `benchmark/score.py` on written predictions; all three call the same [`../metrics/`](../metrics/) code and the same decoder. Before masking, the scorer reproduced run 3's training-time numbers to three decimals, which is the check that matters since the two paths share no code above `metrics/`.
+
+**Every row is scored with padding masked** ([`masked_model.py`](masked_model.py)); upstream's model attended to the zeros padding each video's last chunk. Rows 1–9 were re-scored after the fact, so their `step` was still *selected* on the unmasked validation; row 10 trained, selected and scored with masking throughout. Measured on the same checkpoints, masking moves YouTube frame F1 by at most 0.006, IoU by 0.005 and mF1S by 0.003, and DGS by at most 0.002 (`%` 0.009). The one clear effect is YouTube `%`, down by up to 0.062 and nearer 1 for every over-segmenting run: a padded tail no longer adds spurious segments. Rankings are unchanged apart from ties inside that noise.
 
 **The two YouTube columns are the same sets for every row.** Raw is the 167 hash-selected held-out videos; filtered is the 82 of those passing `DEV_FILTER`, a strict subset; neither overlaps the 38,578 training videos, identical across all four runs. Run 4 was scored after the quality cache grew to the whole training corpus, so run 3 was re-scored alongside it and reproduced its row exactly — the sets, scorer and decoder had not moved. One asymmetry remains that re-scoring cannot remove: runs 1–3 *selected* their checkpoint on raw dev and run 4 on filtered, so each is slightly favoured in the column it selected on. Differences of ±0.01 between rows 3 and 4 are inside that.
 
-**The sampling schedule (4 vs 3) is a wash in domain**: mF1S +0.007 filtered and −0.005 raw, frame F1 −0.007, `%` nearer 1 (1.24 against 1.36). Out of domain it gains frame F1 but drops DGS mF1S from 0.206 to 0.130, with `%` falling to 0.54 — it under-segments DGS. The 40k against 50k OneCycle length is a second difference between the two runs.
+**The sampling schedule (4 vs 3) is a wash in domain**: mF1S +0.005 filtered and −0.008 raw, frame F1 −0.003, `%` nearer 1 (1.23 against 1.30). Out of domain it gains frame F1 but drops DGS mF1S from 0.206 to 0.130, with `%` falling to 0.54 — it under-segments DGS. The 40k against 50k OneCycle length is a second difference between the two runs.
 
 Each run writes two figures per validation set beside its checkpoints, and logs them to W&B: `segments_<set>_phrase_120s.png` is two minutes of ribbons, `segments_<set>_phrase_1024f.png` one 1024-frame window with a keyframe strip and the subtitle text. See [`plot_segmentation.py`](plot_segmentation.py).
 

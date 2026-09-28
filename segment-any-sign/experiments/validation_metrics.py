@@ -31,6 +31,11 @@ and ours would be a third, so instead the forward is computed once and cached fo
 all three — which makes validation *cheaper* than it was before these metrics
 existed. Training pays one extra forward every `metrics_every_n_steps` steps
 (9, about once per epoch at batch 64).
+
+**Padding is masked** ([`masked_model.py`](masked_model.py)): every forward here
+passes the batch's `lengths`, and the model's BatchNorm is the masked one, so a
+window shorter than the batch — or a long video's padded last chunk — is computed
+exactly as it would be alone.
 """
 
 from __future__ import annotations
@@ -50,6 +55,9 @@ from sign_language_segmentation.utils.bio import BIO  # noqa: E402
 from metrics import (bio_to_segments, frame_f1, frame_f1_micro,  # noqa: E402
                      global_iou, mf1s_from_counts, segment_counts,
                      segment_percentage)
+
+from experiments.masked_model import (masked_encode, masked_forward,  # noqa: E402
+                                      use_masked_batchnorm)
 
 # upstream UNK=0, O=1, B=2, I=3  ->  ours O=0, B=1, I=2
 TO_OURS = {1: 0, 2: 1, 3: 2}
@@ -105,6 +113,9 @@ class ValidationMetricsModel(PoseTaggingModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # same parameters and buffers, so checkpoints stay interchangeable with
+        # plain PoseTaggingModel; only training statistics on padded batches differ
+        use_masked_batchnorm(self.frame_cnn)
         if self.accumulate > 1:
             import math
             self.steps_per_epoch = max(1, math.ceil(self.steps_per_epoch
@@ -139,17 +150,20 @@ class ValidationMetricsModel(PoseTaggingModel):
     #: forward passes reuse ours instead of recomputing it
     _cached_log_probs = None
 
-    def forward(self, pose_data, timestamps=None, *args, **kwargs):
+    encode = masked_encode
+
+    def forward(self, pose_data, timestamps=None, lengths=None):
         if self._cached_log_probs is not None:
             return self._cached_log_probs
-        return super().forward(pose_data, timestamps, *args, **kwargs)
+        return masked_forward(self, pose_data, timestamps, lengths)
 
     def _accumulate(self, batch, collected: dict, log_probs=None) -> None:
         """Score one batch into `collected`, exactly as benchmark/score.py would."""
         with torch.no_grad():
             if log_probs is None:
                 log_probs = self.forward(batch["pose"],
-                                         timestamps=batch.get("timestamps"))
+                                         timestamps=batch.get("timestamps"),
+                                         lengths=batch.get("lengths"))
 
             for upstream_name, our in LEVELS.items():
                 if upstream_name not in self.levels:
@@ -204,15 +218,16 @@ class ValidationMetricsModel(PoseTaggingModel):
 
         Upstream iterates both heads unconditionally, so an unsupervised one
         cannot be skipped by hiding its labels — this mirrors its loss instead.
-        Kept deliberately close to the original; the only change is the `levels`
-        filter and the matching guard on the sign-head Dice term.
+        Kept deliberately close to the original; the changes are the `levels`
+        filter, the matching guard on the sign-head Dice term, and passing the
+        batch's `lengths` to the forward. That last one is why this never
+        delegates to `super().step()`, even with both heads supervised: upstream
+        calls the forward without lengths, which would leave padding unmasked.
         """
-        if set(self.levels) == set(LEVELS):
-            return super().step(batch, name)
-
         pose_data = batch["pose"]
         batch_size = len(pose_data)
-        log_probs = self.forward(pose_data, timestamps=batch.get("timestamps"))
+        log_probs = self.forward(pose_data, timestamps=batch.get("timestamps"),
+                                 lengths=batch.get("lengths"))
 
         total_loss = torch.zeros(1, device=self.device).squeeze()
         for pred_type, loss_fn in (("sign", self.sign_loss_fn),
@@ -385,8 +400,9 @@ class ValidationMetricsModel(PoseTaggingModel):
             if dataloader_idx < len(self.val_dataset_names) else str(dataloader_idx)
 
         with torch.no_grad():
-            log_probs = super().forward(batch["pose"],
-                                        timestamps=batch.get("timestamps"))
+            log_probs = masked_forward(self, batch["pose"],
+                                       timestamps=batch.get("timestamps"),
+                                       lengths=batch.get("lengths"))
         # let `step` reuse the forward rather than recompute it for the loss
         self._cached_log_probs = log_probs
         try:

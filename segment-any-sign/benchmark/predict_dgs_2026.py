@@ -28,18 +28,18 @@ annotations the 2023 run uses. Everything below that is the 2026 model's own:
     non-O, so two touching segments can only be counted as one while the gold
     decoder splits them, capping phrase `%` at 0.25 on DGS test however good the
     model is. Use it only to reproduce the shipped model on its own terms.
-  * **Chunking** is upstream's by default: the whole clip goes to
-    `PoseTaggingModel`, whose CNN runs full length and whose transformer then
-    cuts it into *non-overlapping* `num_frames` chunks. Attention cannot cross a
-    cut, so a segment spanning one is seen as two halves.
+  * **Chunking** is upstream's: the whole clip goes to `PoseTaggingModel`,
+    whose CNN runs full length and whose transformer then cuts it into
+    *non-overlapping* `num_frames` chunks, the last one padded. Attention cannot
+    cross a cut, so a segment spanning one is seen as two halves.
 
-    `--overlap 0.5` instead slides a `num_frames` window and keeps each frame's
-    prediction from the window where it sits most centrally. Measured on the
-    2026 baseline checkpoint it changes nothing (sign IoU 0.597 -> 0.599, phrase
-    0.824 -> 0.825) for 1.6x the runtime, so it is off by default. The likely
-    reason: upstream's CNN already runs full length, so features at a chunk edge
-    carry neighbouring context, while sliding windows the CNN too — fixing the
-    attention cut and adding a convolution cut.
+    Every model is loaded through `enable_masking`
+    ([`../experiments/masked_model.py`](../experiments/masked_model.py)), so that
+    padded last chunk is masked rather than attended to — the one change to the
+    model as published, and a fix rather than a choice. An earlier version ended
+    the last chunk at the final frame instead and could overlap chunks; overlap
+    measured to buy nothing, and with the mask the padded chunk is exact, so both
+    are gone.
 
 Two conventions are translated on the way out:
 
@@ -104,22 +104,27 @@ def load_checkpoint(model_path: str, device: str = "cpu"):
     are dropped and everything else is loaded **strictly**: a half-loaded model
     produces plausible nonsense rather than an error, so only the keys we can
     name are forgiven.
+
+    Every model comes back with padding masked (`enable_masking`), whichever
+    branch loaded it, so no evaluation path can score an unmasked model.
     """
     import torch
 
     from sign_language_segmentation.bin import _load_model_uncached
     from sign_language_segmentation.model.model import PoseTaggingModel
 
+    from experiments.masked_model import enable_masking
+
     path = Path(model_path)
     if path.suffix != ".ckpt":
-        return _load_model_uncached(model_dir=str(path), device=device)
+        return enable_masking(_load_model_uncached(model_dir=str(path), device=device))
 
     state = torch.load(path, map_location=device, weights_only=False)
     dropped = [key for key in TRAINING_ONLY_KEYS if key in state["state_dict"]]
     for key in dropped:
         state["state_dict"].pop(key)
     if not dropped:
-        return _load_model_uncached(model_dir=str(path), device=device)
+        return enable_masking(_load_model_uncached(model_dir=str(path), device=device))
 
     # load_from_checkpoint only takes a path, so the trimmed state goes via a
     # sibling file that is removed whether or not the load succeeds
@@ -131,7 +136,7 @@ def load_checkpoint(model_path: str, device: str = "cpu"):
     finally:
         patched.unlink(missing_ok=True)
     print(f"dropped training-only keys: {', '.join(dropped)}")
-    return model.to(device).eval()
+    return enable_masking(model.to(device).eval())
 
 
 def rle(values) -> list[list[int]]:
@@ -164,73 +169,6 @@ def prepare(pose, fps: float, velocity: bool = True):
     return pose_data, frame_times
 
 
-def overlapping_encode(overlap: float):
-    """An `encode` that overlaps the *transformer* chunks, CNN untouched.
-
-    Upstream runs the CNN over the whole clip and only then cuts the sequence
-    into non-overlapping `num_frames` chunks for the transformer, so attention
-    never crosses a cut. This keeps the CNN exactly as it is — full length, so
-    its features still carry context across every boundary — and slides the
-    transformer window instead, giving each frame its prediction from the chunk
-    where it sits most centrally.
-
-    It also ends the last chunk at the final frame instead of zero-padding it.
-    Upstream pads, and since it removed the attention mask, real frames in that
-    chunk attend to up to 1023 zeros. That is a bug, not a choice, so it is always
-    fixed here — worth phrase % 0.751 -> 0.771 on the 2026 baseline, more than
-    overlap itself buys.
-
-    That is the difference from windowing the whole model from outside, which
-    also cuts the CNN and measured no benefit.
-    """
-    def encode(self, pose_data, timestamps=None):
-        import torch
-
-        x = self.input_norm(self.frame_cnn(pose_data))  # full length, unchanged
-        batch, total, _ = x.shape
-
-        if timestamps is None:
-            ts = (torch.arange(total, device=x.device, dtype=torch.float32)
-                  / self.REFERENCE_FPS).unsqueeze(0).expand(batch, -1)
-        else:
-            ts = timestamps.to(x.device)
-            if ts.dim() == 1:
-                ts = ts.unsqueeze(0).expand(batch, -1)
-
-        chunk = self.hparams.num_frames
-        if total <= chunk:
-            for layer in self.encoder_attn:
-                x = layer(x, ts)
-            return x
-
-        stride = max(1, int(round(chunk * (1.0 - overlap))))
-        starts = list(range(0, max(1, total - chunk + 1), stride))
-        if starts[-1] + chunk < total:
-            starts.append(total - chunk)
-
-        # chunks are uniform, so run them all as one batch, as upstream does
-        segments = torch.stack([x[0, s:s + chunk] for s in starts])
-        seg_ts = torch.stack([ts[0, s:s + chunk] for s in starts])
-        for layer in self.encoder_attn:
-            segments = layer(segments, seg_ts)
-
-        # claim strictly left to right: each chunk owns from where the previous
-        # stopped to `margin` short of its own right edge, so a frame is never
-        # taken from beside a cut, and the tail chunk cannot overwrite frames it
-        # sees badly
-        out = torch.zeros_like(x)
-        margin, prev_hi = (chunk - stride) // 2, 0
-        for i, s in enumerate(starts):
-            hi = total if i == len(starts) - 1 else s + chunk - margin
-            lo, hi = max(prev_hi, s), max(hi, prev_hi)
-            if hi > lo:
-                out[0, lo:hi] = segments[i, lo - s:hi - s]
-            prev_hi = hi
-        return out
-
-    return encode
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -248,12 +186,6 @@ def main() -> None:
                              "sentence's glosses (the 2023 definition, used for the "
                              "benchmark so the column is consistent); 'sentence' = "
                              "the annotated sentence bounds, this model's own target")
-    parser.add_argument("--overlap", type=float, default=0.0,
-                        help="overlap the transformer chunks by this fraction "
-                             "(0-1), leaving the CNN full length. Default 0: no "
-                             "overlap, measured to buy nothing. The last chunk "
-                             "always ends at the final frame rather than being "
-                             "zero-padded — that is a fix, not an option")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--tfds-root", default=dgs_data.TFDS_ROOT)
     parser.add_argument("--backup", default=dgs_data.BACKUP)
@@ -304,9 +236,7 @@ def main() -> None:
     print(f"phrase gold  {args.phrase}")
     print(f"pose dims    {pose_dims}  (velocity {'on' if velocity else 'off'})")
     print(f"chunking     {num_frames}-frame transformer chunks, "
-          f"{args.overlap:.0%} overlap, tail chunk unpadded\n")
-    import types
-    model.encode = types.MethodType(overlapping_encode(args.overlap), model)
+          f"last one padded and masked\n")
 
     started = time.time()
     clips = []
@@ -358,7 +288,7 @@ def main() -> None:
         # argmax decoding has no thresholds; score.py renders the absence as "-"
         "thresholds": {},
         "source": args.source,
-        "overlap": args.overlap,
+        "chunking": "padded last chunk, masked",
         "decode": args.decode,
         "velocity": velocity,
         "pose_dims": list(pose_dims),

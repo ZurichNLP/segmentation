@@ -78,11 +78,15 @@ BODY_PART_DROPOUT="${8:-0.1}"
 ATTN_DROPOUT="${9:-0.1}"
 NOTE="${4:-weights ${WEIGHTS}, schedule ${SCHEDULE}, fps aug ${FPS_AUG}, tempo ${TEMPO}, frame dropout ${FRAME_DROPOUT}, body-part dropout ${BODY_PART_DROPOUT}, attention dropout ${ATTN_DROPOUT}, 40k steps}"   # README `change` column
 
-REPO=/home/zifjia/segmentation/segment-any-sign
+# the checkout the job was submitted from, so a git worktree trains its own
+# branch; the main checkout when submitted from anywhere else
+REPO="${SLURM_SUBMIT_DIR:-/home/zifjia/segmentation/segment-any-sign}"
+[ -f "$REPO/experiments/train.py" ] || REPO=/home/zifjia/segmentation/segment-any-sign
 PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
 
 mkdir -p /scratch/zifjia/segment-any-sign/slurm
 cd "$REPO"
+echo "repo       ${REPO}  ($(git rev-parse --abbrev-ref HEAD))"
 
 echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   fps aug ${FPS_AUG}   tempo ${TEMPO}   run 02_pretrain_youtube${SUFFIX}"
 echo "dropout    frame ${FRAME_DROPOUT}   body part ${BODY_PART_DROPOUT}   attention ${ATTN_DROPOUT}"
