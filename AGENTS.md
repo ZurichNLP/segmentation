@@ -109,8 +109,7 @@ The base branch is `segment-any-sign`.
 2. Create a short-lived branch for the task from it:
    `git switch -c <short-name> --no-track origin/segment-any-sign`
 3. Commit in small steps, one logical change per commit.
-4. Run the tests that cover what you changed, and the linter on the files you changed. Do
-   not rely on CI for this: run the checks yourself.
+4. Run the tests that cover what you changed, and the linter on the files you changed.
 5. Push the branch: `git push -u origin <short-name>`
 6. Open a pull request against `segment-any-sign` describing what changed, why, what you ran
    and what you could not verify. Then stop: the user reviews and merges.
