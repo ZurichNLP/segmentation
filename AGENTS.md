@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Instructions for coding agents working in this repository on the `segment-any-sign` branch.
-"The maintainer" below is Gerard Sant.
+"The user" below is the person you are working for in the session.
 
 This file holds conventions only. It contains no project status, plan or list of known
 problems on purpose: read those from the READMEs under `segment-any-sign/` and from the code,
@@ -40,7 +40,8 @@ run from inside `segment-any-sign/`.
 - Upstream package tests: `pytest` from the repository root. They need the dependencies that
   `.github/workflows/test.yaml` installs.
 - Lint: `ruff check <the files you changed>`, compared with the same command on the base
-  branch. `ruff` comes from the `dev` extra in `pyproject.toml`.
+  branch. `ruff` is in the `dev` extra of `pyproject.toml`; if it is missing, install it
+  with `pip install ruff`.
 - Benchmark and scoring: see `segment-any-sign/benchmark/README.md`. The commands in that
   README use the test split and the prediction scripts default to it, so always pass
   `--split` explicitly (see Evaluation rules).
@@ -49,7 +50,7 @@ run from inside `segment-any-sign/`.
 
 Training, pose extraction and anything that reads a whole corpus need the cluster and its
 data. Where a script offers a quick check (for example `--dry-run` and `--limit` in
-`experiments/train.py`), use it first, and ask the maintainer before submitting a job.
+`experiments/train.py`), use it first, and ask the user before submitting a job.
 
 If the environment or the data is not available where you are running, say which checks you
 could not run. Do not replace missing data with mock data.
@@ -61,15 +62,21 @@ These protect the comparability of every number in the repository.
 - One evaluation protocol for every model, as documented in
   `segment-any-sign/benchmark/README.md`. An experiment may change the model; it may not
   change how it is scored. Deviate only for a demonstrable bug, record why where that README
-  records deviations, and ask the maintainer first.
-- Use the validation split, and always pass the split explicitly. Use the test split only
-  when the maintainer asks for it.
+  records deviations, and ask the user first.
+- Use the validation split, and state the split explicitly wherever a script takes one
+  (`--split` in the prediction scripts, `--eval-split` in `experiments/train.py`). Use the
+  test split only when the user asks for it.
+- When you add or change code that can alter a number without failing, add a test: metrics,
+  label construction, sampling, windowing and chunking, decoding, and the construction of
+  gold segments and splits. A bug fixed in that code comes with a test that fails before the
+  fix. Tests use small hand-made inputs, as the metric tests do. For other code, say in the
+  commit how the change was checked.
 - Any change to sampling, resampling, frame dropout, windowing or chunking must keep each
-  frame's label equal to what the annotation says at that frame's real time, and comes with a
-  test that checks it.
-- Tests are the specification. Before adding, changing, deleting or skipping a test, explain
-  the change and wait for the maintainer's approval. When a test fails, say whether the code
-  or the test is wrong and why; never weaken an assertion to make it pass.
+  frame's label equal to what the annotation says at that frame's real time.
+- Tests are the specification. Before changing, deleting or skipping an existing test,
+  explain the change and wait for the user's approval. A new test is proposed in the
+  pull request, where the review is the approval. When a test fails, say whether the code or
+  the test is wrong and why; never weaken an assertion to make it pass.
 - A new test lives next to the code it tests as `test_*.py`, like
   `segment-any-sign/metrics/test_segmentation.py`, and the pull request says how to run it.
 - Every training run leaves what is needed to repeat it. `experiments/train.py` writes this
@@ -86,8 +93,9 @@ These protect the comparability of every number in the repository.
   run's row in `experiments/README.md`. Test predictions under `benchmark/predictions/` are
   ignored and stay uncommitted.
 - Keep each data location as a named constant at the top of the module that owns it, with a
-  command-line option where a script needs to override it, as the existing loaders do. Do
-  not add credentials or new paths under a personal directory.
+  command-line option where a script needs to override it. Do not add credentials, and do
+  not hard-code a directory that belongs to one user. Where existing code does, do not copy
+  the pattern; changing it is a task of its own.
 - Do not edit generated files by hand (for example `datasets/*/explore.md` and its
   `explore_files/`); edit the script that produces them, regenerate, and commit the result.
 - Follow the style of the surrounding code, and add no new lint errors in the files you
@@ -97,14 +105,15 @@ These protect the comparability of every number in the repository.
 
 The base branch is `segment-any-sign`.
 
-1. Update: `git switch segment-any-sign && git pull`
-2. Create a short-lived branch for the task: `git switch -c <short-name>`
+1. Get the latest base: `git fetch origin`
+2. Create a short-lived branch for the task from it:
+   `git switch -c <short-name> --no-track origin/segment-any-sign`
 3. Commit in small steps, one logical change per commit.
 4. Run the tests that cover what you changed, and the linter on the files you changed. Do
    not rely on CI for this: run the checks yourself.
 5. Push the branch: `git push -u origin <short-name>`
 6. Open a pull request against `segment-any-sign` describing what changed, why, what you ran
-   and what you could not verify. Then stop: the maintainer reviews and merges.
+   and what you could not verify. Then stop: the user reviews and merges.
 
 Rules:
 
@@ -112,7 +121,7 @@ Rules:
   rewrite commits that have been pushed. Do not merge your own pull request.
 - Syncing from the upstream repository is a pull request of its own, with nothing else in it.
 - `segment-any-sign/latex` is a submodule that points to the paper draft. Leave it alone
-  unless the maintainer asks; a pointer update is a commit of its own.
+  unless the user asks; a pointer update is a commit of its own.
 - Start experiments from a committed state, because each run records the commit it ran from.
 
 Commit messages: a capitalised imperative summary line of at most 72 characters, a blank
@@ -129,6 +138,6 @@ descriptions. Do not change `git config user.name` or `user.email`, and do not u
 Say what you changed, what you ran and what the output was, and what you did not or could not
 verify. Report tests as passing only if you ran them in this session.
 
-Ask the maintainer before: submitting cluster jobs, touching the test split, changing tests,
+Ask the user before: submitting cluster jobs, touching the test split, changing tests,
 the evaluation protocol or a metric definition, modifying the upstream package, deleting
 files, or anything that cannot be undone.
