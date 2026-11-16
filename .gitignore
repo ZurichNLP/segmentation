@@ -13,3 +13,5 @@ uv.lock
 dist/
 wandb/
 *.log
+
+.claude/worktrees/
