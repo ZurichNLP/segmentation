@@ -924,19 +924,23 @@ def link_slurm_log(run_dir: Path) -> None:
 def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
     """Record everything needed to reproduce this run, beside its checkpoints.
 
-    Every hyperparameter (upstream's and ours), the exact command line, the git
-    commit and whether the tree was dirty, and the software/hardware it ran on.
-    A checkpoint whose settings cannot be recovered is not a result.
+    Every hyperparameter (upstream's and ours), the exact command line, the
+    state of the code, and the software/hardware it ran on. A checkpoint whose
+    settings cannot be recovered is not a result.
+
+    The state of the code comes from `provenance.py`, the same check the SLURM
+    log prints. Under "code": "commit" and "branch"; "dirty", true or false, or
+    "unknown" when git could not answer; and "uncommitted", the paths
+    `git status --porcelain` reported (changes to tracked files, staged or not,
+    and untracked files), or null when it failed. Only the paths are kept, not
+    their contents. A dirty tree is recorded, not refused.
+
+    A run_config.json without the "dirty" key was written before this was
+    recorded, so the absence of the key does not mean a clean tree.
     """
     import platform
-    import subprocess
 
-    def git(*cmd: str) -> str:
-        try:
-            return subprocess.check_output(["git", "-C", str(Path(__file__).resolve().parent),
-                                            *cmd], text=True, stderr=subprocess.DEVNULL).strip()
-        except Exception:
-            return "unknown"
+    from experiments import provenance
 
     torch_version = device_name = "unavailable"
     try:
@@ -955,14 +959,13 @@ def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
         "ours": {"phrase": mine.phrase, "velocity": mine.velocity,
                  "select_on": mine.select_on, "limit": mine.limit},
         "args": {k: v for k, v in sorted(vars(args).items())},
-        "code": {"commit": git("rev-parse", "HEAD"),
-                 "branch": git("rev-parse", "--abbrev-ref", "HEAD")},
+        "code": provenance.git_state(Path(__file__).resolve().parent),
         "environment": {"python": platform.python_version(), "torch": torch_version,
                         "host": platform.node(), "gpu": device_name},
     }
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "run_config.json").write_text(json.dumps(config, indent=2, default=str))
-    print(f"wrote {run_dir}/run_config.json  (commit {config['code']['commit'][:8]})")
+    print(f"wrote {run_dir}/run_config.json  (commit {provenance.describe(config['code'])})")
 
 
 def write_data_report(run_dir: Path, phrase: str) -> dict:
