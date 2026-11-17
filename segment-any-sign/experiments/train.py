@@ -51,7 +51,9 @@ scalar summary to the W&B run. A run that leaks documents between splits aborts
 before training rather than producing a number nobody can trust.
 
 It also writes `dist/<run>/run_config.json`: every hyperparameter, the command
-line, the git commit, and the python/torch/GPU it ran on — enough to reproduce the run from the checkpoint alone.
+line, the git commit and branch and whether the tree had uncommitted changes,
+and the python/torch/GPU it ran on — enough to reproduce the run from the
+checkpoint alone.
 
 The full metric set from `../metrics/` is logged on **both** train and validation
 under matching names, so W&B can overlay the two curves — see

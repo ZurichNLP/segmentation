@@ -90,6 +90,14 @@ def test_untracked_file_is_dirty_and_listed(repo):
     assert state["uncommitted"] == ["new.txt"]
 
 
+def test_untracked_file_is_reported_whatever_the_git_config(repo):
+    git(repo, "config", "status.showUntrackedFiles", "no")
+    (repo / "new.txt").write_text("new\n")
+    state = git_state(repo)
+    assert state["dirty"] is True
+    assert state["uncommitted"] == ["new.txt"]
+
+
 def test_not_a_repository_is_unknown_not_clean(tmp_path, monkeypatch):
     # keep git from finding a repository in a directory above tmp_path
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
@@ -97,6 +105,18 @@ def test_not_a_repository_is_unknown_not_clean(tmp_path, monkeypatch):
     plain.mkdir()
     assert git_state(plain) == {"commit": "unknown", "branch": "unknown",
                                 "dirty": "unknown", "uncommitted": None}
+
+
+# --- describe ----------------------------------------------------------------
+
+def test_describe_marks_a_tree_that_could_not_be_checked():
+    from experiments.provenance import describe
+
+    state = {"commit": "0123456789abcdef0123456789abcdef01234567", "branch": "main",
+             "dirty": "unknown", "uncommitted": None}
+    clean = describe({**state, "dirty": False})
+    assert state["commit"].startswith(clean)
+    assert describe(state) == clean + " (dirty unknown)"
 
 
 # --- python -m experiments.provenance ----------------------------------------
