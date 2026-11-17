@@ -36,7 +36,7 @@ and form your own view.
 Environment setup is in the Setup section of `segment-any-sign/README.md`. Project scripts are
 run from inside `segment-any-sign/`.
 
-- Metric tests: `cd segment-any-sign && pytest metrics/`
+- Metric tests: `cd segment-any-sign && pytest tests/`
 - Upstream package tests: `pytest` from the repository root. They need the dependencies that
   `.github/workflows/test.yaml` installs.
 - Lint: `ruff check <the files you changed>`, compared with the same command on the base
@@ -77,8 +77,8 @@ These protect the comparability of every number in the repository.
   explain the change and wait for the user's approval. A new test is proposed in the
   pull request, where the review is the approval. When a test fails, say whether the code or
   the test is wrong and why; never weaken an assertion to make it pass.
-- A new test lives next to the code it tests as `test_*.py`, like
-  `segment-any-sign/metrics/test_segmentation.py`, and the pull request says how to run it.
+- Tests live in `segment-any-sign/tests/` as `test_*.py`, like
+  `segment-any-sign/tests/test_segmentation.py`, and the pull request says how to run it.
 - Every training run leaves what is needed to repeat it. `experiments/train.py` writes this
   for each run, and `experiments/add_result_row.py` adds the row of a pretraining run to its
   table in `experiments/README.md`; their docstrings describe what is recorded. Numbers in

@@ -1,7 +1,7 @@
 """Unit tests for the segmentation metrics.
 
 Run from `segment-any-sign/`:
-    pytest metrics/
+    pytest tests/
 """
 
 import numpy as np

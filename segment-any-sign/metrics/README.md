@@ -64,7 +64,7 @@ Sign and phrase level kept separate, as in Table 1 of the 2023 paper. Most datas
 ## Tests
 
 ```bash
-conda activate sas && cd segment-any-sign && pytest metrics/
+conda activate sas && cd segment-any-sign && pytest tests/
 ```
 
 45 tests: each metric's definition and edge cases, the disagreements above, greedy-versus-optimal matching, micro-versus-macro aggregation, and inclusive-bound arithmetic.
