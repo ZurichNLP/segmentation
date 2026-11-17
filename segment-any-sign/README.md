@@ -78,6 +78,8 @@ conda activate sas
 
 `sas` is the environment for **the latest model** (2026) as well as for dataset curation and scoring.
 
+`environment.lock.yml` records the exact versions of the last environment built from `environment.yml`. It is a record, not the file to install from. Regenerate it when `environment.yml` changes.
+
 Only the 2023 model needs an environment of its own, because its pose-format 0.3.2 pin cannot coexist with the >=0.8.1 the 2026 model requires:
 
 ```bash
