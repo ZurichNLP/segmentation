@@ -40,8 +40,8 @@ run from inside `segment-any-sign/`.
 - Upstream package tests: `pytest` from the repository root. They need the dependencies that
   `.github/workflows/test.yaml` installs.
 - Lint: `ruff check <the files you changed>`, compared with the same command on the base
-  branch. `ruff` is in the `dev` extra of `pyproject.toml`; if it is missing, install it
-  with `pip install ruff`.
+  branch. `ruff` is pinned in `segment-any-sign/environment.yml`; outside that
+  environment, install the same version, because the default rules change between versions.
 - Benchmark and scoring: see `segment-any-sign/benchmark/README.md`. The commands in that
   README use the test split and the prediction scripts default to it, so always pass
   `--split` explicitly (see Evaluation rules).
