@@ -25,6 +25,9 @@ dependencies:
   - nbconvert
   - matplotlib
   - pandas
+  # the same pin as in the pip section below, so that conda picks a pandas
+  # that works with numpy 1.x
+  - numpy<2
   - pip:
       - pympi-ling
       # segmentation metrics + their tests
