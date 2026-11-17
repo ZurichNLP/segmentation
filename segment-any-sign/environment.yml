@@ -25,11 +25,18 @@ dependencies:
   - nbconvert
   - matplotlib
   - pandas
+  # the same pin as in the pip section below, so that conda picks a pandas
+  # that works with numpy 1.x
+  - numpy<2
   - pip:
       - pympi-ling
       # segmentation metrics + their tests
       - scikit-learn
       - pytest
+      # the linter AGENTS.md asks for; upstream lists it only in its dev extra.
+      # Pinned: the default rules differ between versions, and a change is
+      # compared with the base branch.
+      - ruff==0.17.5
       # reading video frames (NCSLGR .mov) for annotation visualisation
       - imageio
       - imageio-ffmpeg
