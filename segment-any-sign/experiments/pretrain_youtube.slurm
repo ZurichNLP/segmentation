@@ -92,7 +92,7 @@ echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   fps aug ${FPS_AUG}   tempo 
 echo "dropout    frame ${FRAME_DROPOUT}   body part ${BODY_PART_DROPOUT}   attention ${ATTN_DROPOUT}"
 echo "node       $(hostname)"
 echo "job        ${SLURM_JOB_ID:-none}  cpus ${SLURM_CPUS_PER_TASK:-?}"
-echo "commit     $(git rev-parse --short HEAD)$(git diff --quiet || echo ' (dirty)')"
+echo "commit     $("$PYTHON" -m experiments.provenance)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 echo
 
