@@ -58,7 +58,8 @@ before training rather than producing a number nobody can trust.
 
 It also writes `dist/<run>/run_config.json`: every hyperparameter, the command
 line, the git commit and branch and whether the tree had uncommitted changes,
-and the python/torch/GPU it ran on — enough to reproduce the run from the
+the paths file and the folder of every key in it, and the python/torch/GPU it
+ran on — enough to reproduce the run from the
 checkpoint alone.
 
 The full metric set from `../metrics/` is logged on **both** train and validation
@@ -1013,6 +1014,12 @@ def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
 
     A run_config.json without the "dirty" key was written before this was
     recorded, so the absence of the key does not mean a clean tree.
+
+    Under "paths": "file", the paths file that was read, and "locations", the
+    folder of every key in it, null for a key that is not set
+    (`paths.describe()`). It records where the code was told to read and write;
+    nothing is checked on disk. A run_config.json without "paths" was written
+    when the folders were constants in the code.
     """
     import platform
 
@@ -1036,6 +1043,7 @@ def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
                  "select_on": mine.select_on, "limit": mine.limit},
         "args": {k: v for k, v in sorted(vars(args).items())},
         "code": provenance.git_state(Path(__file__).resolve().parent),
+        "paths": paths.describe(),
         "environment": {"python": platform.python_version(), "torch": torch_version,
                         "host": platform.node(), "gpu": device_name},
     }

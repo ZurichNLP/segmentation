@@ -10,6 +10,7 @@ Each test imports what it tests, so one missing function cannot stop the others.
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -220,3 +221,32 @@ def test_set_wandb_dir_without_the_key_names_it(set_locations):
     args = argparse.Namespace(no_wandb=False, wandb_dir=".")
     assert "outputs.wandb" in message_of(set_wandb_dir, args, [])
     assert args.wandb_dir == "."
+
+
+# --- write_run_config: the record of the locations ---------------------------
+
+def test_run_config_records_the_paths_file_and_every_location(tmp_path, paths_file,
+                                                               set_locations):
+    import paths
+    from experiments.train import write_run_config
+
+    set_locations({"data.public_dgs_corpus.downloads": tmp_path / "downloads",
+                   "data.youtube_sl25.root": tmp_path / "not_there"})
+    args = argparse.Namespace(learning_rate=1e-3)
+    mine = argparse.Namespace(phrase="glosses", velocity="off",
+                              select_on="mean_mf1s", limit=None)
+    write_run_config(tmp_path / "run", args, mine, "validation_mean_mf1s")
+
+    recorded = json.loads((tmp_path / "run" / "run_config.json").read_text())["paths"]
+    assert recorded["file"] == str(paths_file)
+    locations = recorded["locations"]
+    assert locations["output_dir"] == f"{tmp_path}/outputs"
+    assert locations["outputs.dist"] == f"{tmp_path}/outputs/dist"
+    assert locations["data.public_dgs_corpus.downloads"] == f"{tmp_path}/downloads"
+    # a key that is not set is recorded as such, not left out
+    assert locations["data.youtube_sl25.videos"] is None
+    # it is a record of what the file says: a folder that is not there is recorded too
+    assert locations["data.youtube_sl25.root"] == f"{tmp_path}/not_there"
+    # every key of the file, and nothing was created to write the record
+    assert recorded == paths.describe()
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["paths.test.yaml", "run"]

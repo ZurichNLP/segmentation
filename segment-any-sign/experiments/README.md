@@ -36,6 +36,8 @@ Nothing a run writes is in the repository. Each folder is a key of the paths fil
 | Run files of Weights & Biases | `outputs.wandb` | W&B makes its own `wandb` folder inside the folder it is given, so the files are in `<outputs.wandb>/wandb/`. `--wandb_dir` on the command line is kept. With `--no_wandb` the key is not needed |
 | Caches: YouTube-SL-25 pose headers, cues and alignment measures, and class weights | `outputs.cache` | Rebuilt from the data when missing |
 
+`run_config.json` records, under `paths`, the paths file the run read and the folder of every key in it.
+
 ## What differs 2023 vs 2026, apart from the architecture
 
 Read off both codebases (`v2023 src/` and `main sign_language_segmentation/`). This is the candidate list to ablate.
