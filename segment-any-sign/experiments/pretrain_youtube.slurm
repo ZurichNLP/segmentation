@@ -73,7 +73,8 @@
 # with `python -m paths outputs.slurm`. SLURM cannot read the paths file, so the
 # folder is written above with %u, SLURM's pattern for the user name: it is
 # `outputs.slurm` as long as output_dir is /scratch/<user>/segment-any-sign in
-# the paths file. Keep the two the same.
+# the paths file. Keep the two the same: train.py prints a warning into the log
+# when the log is not in `outputs.slurm`.
 
 set -euo pipefail
 

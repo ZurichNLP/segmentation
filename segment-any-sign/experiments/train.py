@@ -59,8 +59,7 @@ before training rather than producing a number nobody can trust.
 It also writes `dist/<run>/run_config.json`: every hyperparameter, the command
 line, the git commit and branch and whether the tree had uncommitted changes,
 the paths file and the folder of every key in it, and the python/torch/GPU it
-ran on — enough to reproduce the run from the
-checkpoint alone.
+ran on — enough to reproduce the run from the checkpoint alone.
 
 The full metric set from `../metrics/` is logged on **both** train and validation
 under matching names, so W&B can overlay the two curves — see
@@ -976,6 +975,10 @@ def link_slurm_log(run_dir: Path) -> None:
 
     Best effort: no SLURM, no scontrol, or an unreadable answer all just mean no
     link. A missing convenience must never stop a run that is ready to train.
+
+    Also prints `slurm_log_warning` when the log is not in the folder
+    `outputs.slurm` of the paths file: SLURM takes its log folder from the
+    `#SBATCH --output` line of the job script, so the two can disagree.
     """
     import subprocess
 
@@ -996,6 +999,37 @@ def link_slurm_log(run_dir: Path) -> None:
         link.unlink()
     link.symlink_to(path)
     print(f"linked {link} -> {path}")
+    warning = slurm_log_warning(path)
+    if warning:
+        print(warning)
+
+
+def slurm_log_warning(log_path: str | Path) -> str | None:
+    """One line of warning when the SLURM log is not inside `outputs.slurm`, else None.
+
+    SLURM opens the log before the job script runs and cannot read the paths
+    file, so its folder comes from the `#SBATCH --output` line. Changing
+    `output_dir` moves the cache, the runs and the W&B files, but not the log;
+    this is where that shows. Links are followed on both sides, so two names of
+    one folder do not warn.
+
+    Never raises and creates nothing: None too when `outputs.slurm` is not set
+    or the paths file cannot be used.
+    """
+    try:
+        configured = paths.lookup("outputs.slurm")
+        if configured is None:
+            return None
+        if Path(log_path).resolve().is_relative_to(Path(configured).resolve()):
+            return None
+        return (f"WARNING the SLURM log is {log_path}, which is not in outputs.slurm "
+                f"({configured} in {paths.file_in_use().name}). SLURM takes the log folder "
+                f"from the #SBATCH --output line of the job script, not from the paths "
+                f"file: change one of the two so that they agree.")
+    except (OSError, RuntimeError, ValueError):
+        # a paths file that cannot be used (PathsError is a RuntimeError), or a
+        # log path that cannot be followed: no warning, never a stop
+        return None
 
 
 def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:

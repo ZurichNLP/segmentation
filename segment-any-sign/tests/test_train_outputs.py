@@ -250,3 +250,87 @@ def test_run_config_records_the_paths_file_and_every_location(tmp_path, paths_fi
     # every key of the file, and nothing was created to write the record
     assert recorded == paths.describe()
     assert sorted(path.name for path in tmp_path.iterdir()) == ["paths.test.yaml", "run"]
+
+
+# --- slurm_log_warning: the log folder that SLURM used -----------------------
+
+def test_slurm_log_warning_is_none_for_a_log_in_the_configured_folder(tmp_path):
+    from experiments.train import slurm_log_warning
+
+    log = tmp_path / "outputs" / "slurm" / "02_pretrain_youtube-8485766.out"
+    assert slurm_log_warning(str(log)) is None
+    assert slurm_log_warning(log) is None
+    assert not (tmp_path / "outputs").exists()          # it looks, it creates nothing
+
+
+def test_slurm_log_warning_follows_links(tmp_path, set_locations):
+    from experiments.train import slurm_log_warning
+
+    # the configured folder and the folder SLURM names are the same folder
+    real = tmp_path / "disk" / "slurm"
+    real.mkdir(parents=True)
+    (tmp_path / "scratch").symlink_to(tmp_path / "disk")
+    set_locations({"outputs.slurm": tmp_path / "scratch" / "slurm"})
+    assert slurm_log_warning(str(real / "job-1.out")) is None
+
+
+def test_slurm_log_warning_names_the_log_the_key_and_the_file(tmp_path, paths_file):
+    from experiments.train import slurm_log_warning
+
+    log = tmp_path / "elsewhere" / "slurm" / "02_pretrain_youtube-8485766.out"
+    warning = slurm_log_warning(str(log))
+    assert str(log) in warning
+    assert "outputs.slurm" in warning
+    assert str(tmp_path / "outputs" / "slurm") in warning
+    assert paths_file.name in warning
+    assert "\n" not in warning                          # one line of the log
+
+    # a folder whose name only starts like the configured one is another folder
+    assert slurm_log_warning(str(tmp_path / "outputs" / "slurm_old" / "job-1.out")) is not None
+
+
+def test_slurm_log_warning_is_none_when_the_key_is_not_set(tmp_path, set_locations):
+    from experiments.train import slurm_log_warning
+
+    set_locations({"outputs.slurm": None})
+    assert slurm_log_warning(str(tmp_path / "anywhere" / "job-1.out")) is None
+
+
+def test_slurm_log_warning_never_raises(tmp_path):
+    import paths
+    from experiments.train import slurm_log_warning
+
+    # a paths file that cannot be used must not stop a run at this point
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("outputs:\n  slurm: relative/folder\n")
+    paths.use_file(broken)
+    assert slurm_log_warning(str(tmp_path / "anywhere" / "job-1.out")) is None
+
+    paths.use_file(tmp_path / "no_such_file.yaml")
+    assert slurm_log_warning(str(tmp_path / "anywhere" / "job-1.out")) is None
+
+
+def test_link_slurm_log_prints_the_warning(tmp_path, monkeypatch, capsys):
+    import subprocess
+
+    from experiments.train import link_slurm_log
+
+    def scontrol(log: Path):
+        """What `scontrol show job` answers for a batch job, cut to the lines used."""
+        return lambda *args, **kwargs: (f"JobId=1 JobName=02_pretrain_youtube\n"
+                                        f"   StdErr={log}\n   StdIn=(null)\n   StdOut={log}\n")
+
+    monkeypatch.setenv("SLURM_JOB_ID", "1")
+    inside = tmp_path / "outputs" / "slurm" / "job-1.out"
+    outside = tmp_path / "elsewhere" / "job-1.out"
+
+    monkeypatch.setattr(subprocess, "check_output", scontrol(inside))
+    link_slurm_log(tmp_path / "run_a")
+    assert os.readlink(tmp_path / "run_a" / "slurm.out") == str(inside)
+    assert "outputs.slurm" not in capsys.readouterr().out
+
+    monkeypatch.setattr(subprocess, "check_output", scontrol(outside))
+    link_slurm_log(tmp_path / "run_b")
+    assert os.readlink(tmp_path / "run_b" / "slurm.out") == str(outside)     # linked all the same
+    printed = capsys.readouterr().out
+    assert "outputs.slurm" in printed and str(outside) in printed
