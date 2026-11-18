@@ -25,7 +25,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import paths
 
-DIST = Path("/scratch/zifjia/segment-any-sign/dist")
 LEVELS = {"sign": "sign", "sentence": "phrase"}
 
 #: (record key, row label, colour). A row is drawn only if some record has it,
@@ -330,7 +329,7 @@ def main() -> None:
 
     import json
 
-    run_dir = DIST / args.run
+    run_dir = paths.output("dist") / args.run
     for dataset in [name.strip() for name in args.datasets.split(",") if name.strip()]:
         # named by what each view fixes: the overview spans a wall-clock window,
         # the detail a fixed number of frames, whose duration depends on the fps

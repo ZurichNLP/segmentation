@@ -26,7 +26,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-DIST = Path("/scratch/zifjia/segment-any-sign/dist")
+import paths
 
 
 def score(checkpoint: Path, dev_filter: bool, device: str, limit: int = None,
@@ -126,7 +126,7 @@ def main() -> None:
 
     from experiments.plot_segmentation import newest_checkpoint
 
-    checkpoint = newest_checkpoint(DIST / args.run, args.which)
+    checkpoint = newest_checkpoint(paths.output("dist") / args.run, args.which)
     sets = ["raw", "filtered"] if args.set == "both" else [args.set]
     results = {}
     for name in sets:

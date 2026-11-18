@@ -45,6 +45,11 @@ self-evidently throwaway; a dry run also deletes its own run directory.
                                   the mean of sign and phrase mF1S; upstream used
                                   hm_iou.
 
+`dist` is a link, made here, to the folder `outputs.dist` of the paths file
+(`../paths.py`): a run folder is `dist/<run>` relative to `segment-any-sign/`,
+here and in upstream's training code, so this script must be run from inside
+`segment-any-sign/`. See `link_dist`.
+
 Every run first writes a data report — split sizes, segment counts, label balance
 and correctness checks — to `dist/<run>/data_stats.{json,log}`, and attaches its
 scalar summary to the W&B run. A run that leaks documents between splits aborts
@@ -226,6 +231,10 @@ def main() -> None:
     from experiments import youtube_dataset  # noqa: F401
 
     from sign_language_segmentation.args import args
+
+    # after the arguments, so that --help needs no location; before anything
+    # that writes below dist/
+    link_dist()
 
     # Upstream's args.py prints the parsed Namespace at import — before any of
     # this — so that first line still shows `datasets='all'` and the two
@@ -883,6 +892,53 @@ def report_effective_config(args, mine, run_name: str) -> None:
           + f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
           + (f"\n  LIMIT       {args.limit} clips per split — NOT a reportable run"
              if args.limit else ""))
+
+
+def link_dist(project: Path | None = None) -> Path:
+    """Make `dist` in the working directory lead to the folder `outputs.dist`.
+
+    A run folder is `dist/<run>` relative to the working directory, here and in
+    upstream's training code, which cannot be given another folder. So `dist`
+    is a link to the configured folder, made here when it is missing. Returns
+    the configured folder.
+
+    Stops, changing nothing, when the working directory is not `project`
+    (`segment-any-sign/` unless given): from the repository root `dist` is the
+    tracked folder of the shipped model. Stops too when `dist` exists and leads
+    anywhere but the configured folder, because the runs in it would be split
+    over two places. A `dist` that already leads there is left as it is, whether
+    it is a link or, for `outputs.dist` set to `dist` itself, the folder.
+    """
+    project = paths.ROOT if project is None else project
+    here = Path.cwd()
+    if here.resolve() != project.resolve():
+        raise SystemExit(
+            f"run experiments/train.py from inside {project.name}/, not from {here}: "
+            f"a run folder is dist/<run> relative to the working directory.")
+
+    target = paths.output("dist")
+    link = Path("dist")
+
+    def leads_to_target() -> bool:
+        return link.exists() and link.resolve() == target.resolve()
+
+    if leads_to_target():
+        return target
+    if not os.path.lexists(link):
+        try:
+            os.symlink(target, link)
+            return target
+        except FileExistsError:
+            # another job made it at the same moment: look at what it made
+            if leads_to_target():
+                return target
+
+    what = (f"a link to {os.readlink(link)}" if link.is_symlink()
+            else "a folder" if link.is_dir() else "a file")
+    raise SystemExit(
+        f"{here / link} is {what}, but outputs.dist is {target} in "
+        f"{paths.file_in_use().name}. Move its contents there and remove it, or "
+        f"change the key.")
 
 
 def link_slurm_log(run_dir: Path) -> None:

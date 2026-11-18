@@ -26,6 +26,15 @@ The [benchmarking rules](../benchmark/README.md#rules) apply unchanged: one eval
 
 Each run reports **dev** numbers here — test is for the final benchmark table only.
 
+## Where a run writes
+
+Nothing a run writes is in the repository. Each folder is a key of the paths file (see Locations in [`../README.md`](../README.md)), and `python -m paths` shows them.
+
+| What | Key | Notes |
+|---|---|---|
+| Run folders: checkpoints, `run_config.json`, the data report, figures | `outputs.dist` | A run folder is `dist/<run>` relative to `segment-any-sign/`, in `train.py` and in upstream's training code. `train.py` therefore makes `dist` a link to this folder when it starts, and must be run from inside `segment-any-sign/`. If `dist` exists and leads somewhere else, it stops and says what to move. `add_result_row.py`, `eval_youtube.py` and `plot_segmentation.py` read `<outputs.dist>/<run>` |
+| Caches: YouTube-SL-25 pose headers, cues and alignment measures, and class weights | `outputs.cache` | Rebuilt from the data when missing |
+
 ## What differs 2023 vs 2026, apart from the architecture
 
 Read off both codebases (`v2023 src/` and `main sign_language_segmentation/`). This is the candidate list to ablate.
