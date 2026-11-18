@@ -38,6 +38,9 @@ run from inside `segment-any-sign/`.
 
 - Project tests (metrics, the paths file, where a run writes):
   `cd segment-any-sign && pytest tests/`
+  The full run needs the `sas` environment, where no test is skipped. Elsewhere, a test
+  that needs a package which is not installed is skipped, and `pytest tests/ -rs` names the
+  package: a run with skipped tests is not the full run.
 - Locations: `python -m paths` shows the paths file in use and each location;
   `python -m paths <key> ...` checks keys as the code does. See Locations in
   `segment-any-sign/README.md`.

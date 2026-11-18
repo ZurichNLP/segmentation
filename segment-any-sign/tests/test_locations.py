@@ -7,8 +7,14 @@ Each corpus is a few hand-made files in pytest's tmp_path, and the paths file of
 the test points at them (`set_locations`, see conftest.py). No test reads a real
 corpus. Each test imports what it tests, so one missing module cannot stop the
 others.
+
+Most tests need only what the metric tests need. A test that reads a pose file
+or imports a module built on the upstream package is marked with `needs`, and
+is skipped, with the missing packages named, where they are not installed. In
+the sas environment no test is skipped.
 """
 
+import importlib.util
 import inspect
 import json
 from pathlib import Path
@@ -16,6 +22,22 @@ from pathlib import Path
 import pytest
 
 DGS_DOWNLOADS = "data.public_dgs_corpus.downloads"
+
+# the upstream package, installed with `pip install -e .`, and the packages
+# that its module `datasets.common` imports
+UPSTREAM = ("sign_language_segmentation", "torch", "pose_format", "pose_anonymization")
+
+
+def needs(*packages: str):
+    """Mark a test: skipped when one of these packages is not installed, which the reason names.
+
+    Only an absent package skips a test. A package that is installed and fails
+    to import, or a missing package that is not listed, still fails it.
+    """
+    missing = [package for package in packages if importlib.util.find_spec(package) is None]
+    return pytest.mark.skipif(
+        bool(missing),
+        reason=f"not installed: {', '.join(missing)}. The sas environment has every package")
 
 
 def message_of(call, *args, **kwargs) -> str:
@@ -78,6 +100,7 @@ def test_dgs_archive_index_without_the_key_names_it(tmp_path, set_locations):
     assert str(tmp_path / "not_there") in message
 
 
+@needs(*UPSTREAM, "pympi")              # the ELAN reader of the upstream package
 def test_dgs_clip_specs_without_the_key_names_it():
     from datasets.public_dgs_corpus import load as dgs_data
 
@@ -111,6 +134,7 @@ def test_dgs_loader_holds_no_folder_as_a_constant():
     assert inspect.signature(dgs_data.local).parameters["backup"].default is inspect.Parameter.empty
 
 
+@needs(*UPSTREAM)
 def test_dgs_dataset_holds_no_folder_as_a_default():
     from experiments.dgs_dataset import DGSCorpusDataset
 
@@ -203,6 +227,7 @@ def test_youtube_index_languages_and_cues_read_the_configured_folder(youtube, tm
     assert yt._cues(index)["vid_a"] == [[1, 2]]
 
 
+@needs("pose_format")
 def test_youtube_clip_specs_are_what_the_files_say(youtube, tmp_path):
     from datasets.youtube_sl25 import load as yt
 
@@ -220,6 +245,7 @@ def test_youtube_clip_specs_are_what_the_files_say(youtube, tmp_path):
                         for video in ("vid_a", "vid_b", "vid_c")}, "vid_cut": None}
 
 
+@needs("pose_format")
 def test_youtube_train_and_dev_split_the_videos(youtube):
     from datasets.youtube_sl25 import load as yt
 
@@ -247,6 +273,7 @@ def test_youtube_loader_holds_no_folder_as_a_constant():
         assert not hasattr(yt, name), name
 
 
+@needs(*UPSTREAM)
 def test_youtube_manifest_records_the_configured_folder(youtube):
     from experiments.youtube_dataset import YouTube25Dataset
 
@@ -290,6 +317,7 @@ def test_video_path_with_a_folder_that_is_not_there_names_the_key(tmp_path, set_
 
 # --- the class-weights cache -------------------------------------------------
 
+@needs(*UPSTREAM)
 def test_class_weights_are_cached_in_the_configured_folder(tmp_path, monkeypatch):
     import argparse
 
