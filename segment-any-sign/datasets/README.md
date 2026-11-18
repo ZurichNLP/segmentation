@@ -2,7 +2,7 @@
 
 One folder per corpus, each with an `explore.py` and a generated `explore.md`. Raw data stays on the shared filesystem, never in this repo.
 
-A corpus used by the benchmark also gets a `load.py`: **one clip list, one set of gold annotations, shared by every model.** Only [`public_dgs_corpus/load.py`](public_dgs_corpus/load.py) exists so far. Models differ in how they preprocess a pose before it enters the network — that part lives in [`../benchmark/`](../benchmark/) — but never in which clips they see or what they are scored against.
+A corpus used by the benchmark also gets a `load.py`: **one clip list, one set of gold annotations, shared by every model.** [`public_dgs_corpus/load.py`](public_dgs_corpus/load.py) is the only one so far. [`youtube_sl25/load.py`](youtube_sl25/load.py) does the same for the corpus used for pretraining, which has no notebook here; see [`../experiments/`](../experiments/). Models differ in how they preprocess a pose before it enters the network — that part lives in [`../benchmark/`](../benchmark/) — but never in which clips they see or what they are scored against.
 
 The benchmark needs **per-sign boundaries** and **poses**. Only the Public DGS Corpus has both today; every other corpus is missing exactly one thing.
 
@@ -19,14 +19,18 @@ The NCSLGR annotation we hold is the sample bundled with the SignStream XML pars
 
 ## Where the data lives
 
-```
-/shares/sign-language.ebling.cl.uzh/NCSLGR/
-/shares/sign-language.ebling.cl.uzh/BSL_Corpus/
-/shares/sign-language.ebling.cl.uzh/Signsuisse/
-/shares/iict-sp2.ebling.cl.uzh/common/How2Sign/
-/shares/iict-sp2.ebling.cl.uzh/common/tensorflow_datasets/{dgs_corpus,mediapi_skel}/
-/shares/iict-sp2.ebling.cl.uzh/zifjia/backups/tensorflow_datasets_2/downloads/  (DGS eaf/cmdi)
-```
+Outside the repository. Code reads each folder from the paths file (see Locations in [`../README.md`](../README.md)): [`../paths.uzh.yaml`](../paths.uzh.yaml) holds the folders at UZH, and [`../paths.example.yaml`](../paths.example.yaml) says what each folder must contain.
+
+| Key | What | Read by |
+|---|---|---|
+| `data.public_dgs_corpus.tfds` | TFDS folder with the 25 fps `dgs_corpus` build | `public_dgs_corpus/load.py` (`iter_clips`), `../benchmark/predict_dgs_2023.py` |
+| `data.public_dgs_corpus.downloads` | download archive of that build: `.pose`, `.eaf`, `.cmdi` | `public_dgs_corpus/load.py` |
+| `data.youtube_sl25.root` | poses, subtitles and metadata | `youtube_sl25/load.py` |
+| `data.youtube_sl25.videos` | the `.mp4` files; optional | `../experiments/plot_segmentation.py` |
+| `data.ncslgr.root` | download destination | `ncslgr/download.py` |
+| `data.signsuisse.root` | poses, videos and the test metadata | `signsuisse/run_2023_segmentation.py` |
+
+The notebooks do not read the paths file yet: each `explore.py` names its folders in its configuration cell, near the top. The corpora that only a notebook reads (`bsl_corpus`, `how2sign`, `mediapi_skel`) have no key, and their folders are written there.
 
 ## Licensing
 

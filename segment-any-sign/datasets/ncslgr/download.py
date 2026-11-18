@@ -18,7 +18,9 @@ semantics and gloss statistics for ~2 MB before committing to anything larger.
 
 Licence (https://www.bu.edu/asllrp/dai-terms.html): research and education use
 only; **no redistribution without permission**; no commercial use; citation
-required. The download directory is group-only for that reason.
+required. The download directory is group-only for that reason. It is the key
+`data.ncslgr.root` of the paths file (`../../paths.py`), unless `--dest` names
+another; it is created when missing.
 
 Usage:
     python download_ncslgr.py              # download + extract
@@ -30,12 +32,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import shutil
+import sys
 import urllib.request
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import paths
+
 BASE_URL = "https://www.bu.edu/asllrp/ncslgr-for-download"
-DEST = Path("/shares/sign-language.ebling.cl.uzh/NCSLGR")
 
 # name -> (url, what it is)
 ARCHIVES = {
@@ -162,7 +168,8 @@ def download_videos(dest: Path, cameras: set[str] | None, force: bool, delay: fl
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dest", type=Path, default=DEST, help="download directory")
+    parser.add_argument("--dest", type=Path, default=None,
+                        help="download directory (default: data.ncslgr.root of the paths file)")
     parser.add_argument("--force", action="store_true", help="re-download even if present")
     parser.add_argument("--no-extract", action="store_true", help="skip unzipping")
     parser.add_argument("--videos", action="store_true",
@@ -175,6 +182,9 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="only the first N videos")
     args = parser.parse_args()
 
+    if args.dest is None:
+        # the script makes the folder itself, so it need not exist yet
+        args.dest = paths.data("ncslgr.root", must_exist=False)
     args.dest.mkdir(parents=True, exist_ok=True)
     print(f"destination {args.dest}\n")
 
