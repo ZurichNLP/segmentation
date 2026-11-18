@@ -37,3 +37,5 @@ dependencies:
       - sign-language-datasets
       # the vendored v2023 metrics import it
       - scikit-learn
+      # reading the paths file, which holds every location outside the repository
+      - pyyaml

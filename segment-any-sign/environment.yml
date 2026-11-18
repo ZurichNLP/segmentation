@@ -28,6 +28,8 @@ dependencies:
   # the same pin as in the pip section below, so that conda picks a pandas
   # that works with numpy 1.x
   - numpy<2
+  # reading the paths file, which holds every location outside the repository
+  - pyyaml
   - pip:
       - pympi-ling
       # segmentation metrics + their tests
