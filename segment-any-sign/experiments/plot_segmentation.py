@@ -23,6 +23,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import paths
+
 DIST = Path("/scratch/zifjia/segment-any-sign/dist")
 LEVELS = {"sign": "sign", "sentence": "phrase"}
 
@@ -387,21 +389,23 @@ def main() -> None:
 # tracks. Theirs compares subtitle timings to signing; ours compares predicted
 # segmentation to gold, so the tracks differ but the reading does not.
 
-#: YouTube mp4s live in a second copy of the corpus, split by whether the video
-#: is ASL. The VGG copy we train from carries poses and subtitles only.
-VIDEO_ROOTS = ("/shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_Colin_Leong/"
-               "ase/downloads",
-               "/shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_Colin_Leong/"
-               "non-ase/downloads")
+#: YouTube mp4s live in a second copy of the corpus, the key
+#: `data.youtube_sl25.videos` of the paths file, split by whether the video is
+#: ASL. The copy we train from carries poses and subtitles only.
+VIDEO_FOLDERS = ("ase/downloads", "non-ase/downloads")
 
 
 def video_path(clip_id: str):
     """The mp4 for a clip, or None. About 85% of YouTube dev clips have one; the
-    Public DGS Corpus archive holds no video at all, only `.pose` and `.eaf`."""
+    Public DGS Corpus archive holds no video at all, only `.pose` and `.eaf`.
+    None for every clip when the paths file names no video folder."""
     import os
 
-    for root in VIDEO_ROOTS:
-        candidate = os.path.join(root, clip_id, f"{clip_id}.mp4")
+    videos = paths.data("youtube_sl25.videos", required=False)
+    if videos is None:
+        return None
+    for folder in VIDEO_FOLDERS:
+        candidate = os.path.join(str(videos), folder, clip_id, f"{clip_id}.mp4")
         if os.path.exists(candidate):
             return candidate
     return None

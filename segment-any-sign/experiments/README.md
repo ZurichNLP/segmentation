@@ -125,7 +125,7 @@ Stage one of the staged design borrowed from [Segment Any Text](../literature/se
 
 ### The data
 
-`/shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_VGG` — 2.8 TB.
+The folder `data.youtube_sl25.root` of the paths file ([`../paths.uzh.yaml`](../paths.uzh.yaml) names the copy at UZH) — 2.8 TB. The loader keeps pose headers, cues and alignment measures in the folder `outputs.cache`; they are keyed by video id and do not record which corpus folder they came from, so delete them when `data.youtube_sl25.root` changes.
 
 | | |
 |---|---|

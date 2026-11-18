@@ -88,13 +88,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-#: Everything a run writes lives on scratch, never in the repo or on /home:
-#: checkpoints are ~68 MB each and the pose caches are large. `dist/` and
-#: `wandb/` in the repo are symlinks to the same root, so relative paths still
-#: work; this is the one path that has to name it outright.
-SCRATCH = Path("/scratch/zifjia/segment-any-sign")
-CACHE_DIR = SCRATCH / "cache"
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import paths
@@ -736,8 +729,9 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
     balance the formula was written against. The weights carried over are then
     deterministic and use 2023's rule unchanged.
 
-    Cached on scratch, keyed by dataset, level set, phrase definition and the
-    clip list itself, so a changed split can never silently reuse old weights.
+    Cached in the folder `outputs.cache` of the paths file, keyed by dataset,
+    level set, phrase definition and the clip list itself, so a changed split
+    can never silently reuse old weights.
 
     Two schemes. `inverse` is 2023's, `total / count` for every class. `inverse-b`
     keeps the corpus relationship between B and I — `count_I / count_B`, which is
@@ -786,7 +780,7 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
                       f"collapses the model onto O. Use --class-weights "
                       f"inverse-b, or --weights-from a corpus with more O.")
 
-    cache_dir = Path(cache_dir or CACHE_DIR)
+    cache_dir = Path(cache_dir) if cache_dir else paths.output("cache")
     cache_path = cache_dir / f"class_weights_{name}_{scheme}_{signature}.json"
     if cache_path.exists():
         weights = json.loads(cache_path.read_text())
