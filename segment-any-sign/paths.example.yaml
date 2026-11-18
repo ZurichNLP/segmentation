@@ -1,0 +1,57 @@
+# Template. Copy to paths.local.yaml, set output_dir, and fill in the data
+# keys you need.
+#
+# paths.local.yaml is not committed. When it exists it is the only file read:
+# it is never merged with paths.uzh.yaml. A key you leave empty stops only
+# the code that uses it, with an error that names the key.
+#
+# Two variables exist: ${user}, the system user name, and ${output_dir}.
+# Every location is an absolute path. `python -m paths` shows the result.
+
+# Folder for everything the code writes. A checkpoint is about 68 MB and each
+# run keeps two, so use a disk with room.
+output_dir:
+
+# To move one output, change its line.
+outputs:
+  # Files that are rebuilt from the data when missing: YouTube-SL-25 pose
+  # headers, subtitle cues and alignment measures, and class weights. The
+  # first build reads every pose header of the corpus, which takes from
+  # minutes to an hour. Delete this folder if you change a data location.
+  cache: ${output_dir}/cache
+  # One folder per training run: checkpoints, run_config.json, the data
+  # report, figures. experiments/train.py links `dist` to it.
+  dist: ${output_dir}/dist
+  # Run files of Weights & Biases, which makes its own `wandb` folder inside.
+  wandb: ${output_dir}/wandb
+  # SLURM logs. SLURM itself takes the folder from the #SBATCH --output line
+  # of experiments/pretrain_youtube.slurm, so keep the two the same.
+  slurm: ${output_dir}/slurm
+
+data:
+  public_dgs_corpus:
+    # TensorFlow Datasets folder that contains the `dgs_corpus` build with
+    # holistic poses at 25 fps. Needed for the 2023 model and `--source tfds`.
+    tfds:
+    # The download archive of that build: the .pose, .eaf and .cmdi files,
+    # each beside an .INFO file that holds its `original_fname`. Needed for
+    # everything else that reads the Public DGS Corpus.
+    downloads:
+  youtube_sl25:
+    # Must contain mediapipe/<video id>.pose, subtitles/<video id>.*.vtt and
+    # youtube-sl-25_youtube-sl-25-metadata.csv.
+    root:
+    # Optional, used only for the keyframes in figures. Must contain
+    # ase/downloads/<video id>/<video id>.mp4 and the same under non-ase/.
+    # Left empty, figures draw the pose instead.
+    videos:
+  ncslgr:
+    # Where datasets/ncslgr/download.py puts the archives. Created if
+    # missing. The licence forbids redistribution: keep it private.
+    root:
+  signsuisse:
+    # Must contain example_mediapipe/<id>.pose, example_videos/<id>.mp4,
+    # metadata_test_de_dsgs.csv and metadata_test_dsgs_de.csv.
+    # datasets/signsuisse/run_2023_segmentation.py writes its ELAN files into
+    # a new folder beside example_mediapipe.
+    root:

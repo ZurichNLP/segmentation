@@ -1,0 +1,624 @@
+"""Unit tests for the paths module, which reads every location from one file.
+
+Run from `segment-any-sign/`:
+    pytest tests/test_paths.py
+
+Each test writes a small paths file by hand in pytest's tmp_path and makes the
+module read it with `paths.use_file`. No test reads `paths.local.yaml`, and the
+only tests that read `paths.uzh.yaml` and `paths.example.yaml` are the ones about
+those two committed files; they create no folder.
+Each test imports what it tests, so one missing module cannot stop the others.
+"""
+
+import ast
+import getpass
+import os
+import re
+import shutil
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+import pytest
+
+from tests.project_files import ROOT, project_files
+
+UZH = ROOT / "paths.uzh.yaml"
+EXAMPLE = ROOT / "paths.example.yaml"
+
+# values that are not a location, and the part of each that the message must show
+NOT_A_LOCATION = [
+    ("${home}/data", "${home}"),                       # only ${user} and ${output_dir} exist
+    ("relative/folder", "relative/folder"),
+    (os.path.join("~", "data"), os.path.join("~", "data")),   # `~` is not a variable
+    ("5", "5"),                                        # a number
+    ("[a, b]", "['a', 'b']"),                          # a list
+]
+
+
+def use(tmp_path: Path, text: str, name: str = "paths.local.yaml") -> Path:
+    """Write a paths file by hand and make the module read it."""
+    import paths
+
+    file = tmp_path / name
+    file.write_text(textwrap.dedent(text))
+    paths.use_file(file)
+    return file
+
+
+def message_of(call, *args, **kwargs) -> str:
+    """The message of the PathsError that the call must raise."""
+    import paths
+
+    with pytest.raises(paths.PathsError) as error:
+        call(*args, **kwargs)
+    return str(error.value)
+
+
+# --- 1. which file is read ---------------------------------------------------
+
+@pytest.fixture
+def two_files(tmp_path, monkeypatch):
+    """The module with its two files in tmp_path; neither is written yet."""
+    import paths
+
+    local, default = tmp_path / "paths.local.yaml", tmp_path / "paths.uzh.yaml"
+    monkeypatch.setattr(paths, "LOCAL_FILE", local)
+    monkeypatch.setattr(paths, "DEFAULT_FILE", default)
+    paths.use_file(None)
+    return local, default
+
+
+def test_the_two_files_are_beside_the_module():
+    import paths
+
+    assert paths.ROOT == ROOT
+    assert paths.LOCAL_FILE == ROOT / "paths.local.yaml"
+    assert paths.DEFAULT_FILE == UZH
+
+
+def test_default_file_is_read_when_there_is_no_local_file(two_files, tmp_path):
+    import paths
+
+    _, default = two_files
+    default.write_text(f"data:\n  corpus:\n    root: {tmp_path}/shared\n")
+    assert paths.file_in_use() == default
+    assert paths.lookup("data.corpus.root") == f"{tmp_path}/shared"
+
+
+def test_local_file_wins_and_the_two_are_never_merged(two_files, tmp_path):
+    import paths
+
+    local, default = two_files
+    default.write_text(f"data:\n  corpus:\n    root: {tmp_path}/shared\n"
+                       f"    extra: {tmp_path}/extra\n")
+    local.write_text(f"data:\n  corpus:\n    root: {tmp_path}/mine\n")
+
+    assert paths.file_in_use() == local
+    assert paths.lookup("data.corpus.root") == f"{tmp_path}/mine"
+    # a key that only the other file has is not set
+    assert paths.lookup("data.corpus.extra") is None
+    assert list(paths.describe()["locations"]) == ["data.corpus.root"]
+    message = message_of(paths.data, "corpus.extra")
+    assert "data.corpus.extra" in message
+    assert "paths.local.yaml" in message
+
+
+def test_no_file_at_all_is_an_error_that_names_the_file(two_files):
+    import paths
+
+    assert "paths.uzh.yaml" in message_of(paths.lookup, "outputs.cache")
+
+
+def test_use_file_replaces_the_rule_and_none_restores_it(two_files, tmp_path):
+    import paths
+
+    _, default = two_files
+    default.write_text(f"output_dir: {tmp_path}/default\n")
+    other = use(tmp_path, f"output_dir: {tmp_path}/other\n", name="other.yaml")
+    assert paths.file_in_use() == other
+    assert paths.lookup("output_dir") == f"{tmp_path}/other"
+
+    paths.use_file(None)
+    assert paths.file_in_use() == default
+    assert paths.lookup("output_dir") == f"{tmp_path}/default"
+
+
+@pytest.mark.parametrize("text", [
+    "data: [unclosed\n",              # not YAML
+    "- a\n- b\n",                     # YAML, but a list
+    "outputs: a string\n",            # `outputs` must hold keys
+    "data:\n  corpus: a string\n",    # and so must each corpus
+    "data:\n  corpus:\n    root:\n      deeper: x\n",
+    "output: a_typo\n",               # the keys are output_dir, outputs and data
+])
+def test_a_file_that_cannot_be_read_is_an_error_that_names_it(tmp_path, text):
+    import paths
+
+    file = use(tmp_path, text)
+    assert file.name in message_of(paths.describe)
+
+
+# --- 2. the two variables, and values that are not a location ----------------
+
+def test_user_and_output_dir_are_substituted(tmp_path):
+    import paths
+
+    use(tmp_path, f"""\
+        output_dir: {tmp_path}/${{user}}/out
+        outputs:
+          cache: ${{output_dir}}/cache
+        data:
+          corpus:
+            root: {tmp_path}/shares/${{user}}/${{user}}
+            beside: ${{output_dir}}/data
+        """)
+    user = getpass.getuser()
+    assert paths.describe()["locations"] == {
+        "output_dir": f"{tmp_path}/{user}/out",
+        "outputs.cache": f"{tmp_path}/{user}/out/cache",
+        "data.corpus.root": f"{tmp_path}/shares/{user}/{user}",
+        "data.corpus.beside": f"{tmp_path}/{user}/out/data",
+    }
+    assert paths.lookup("outputs.cache") == f"{tmp_path}/{user}/out/cache"
+
+
+def test_a_value_is_used_as_written_no_link_is_resolved(tmp_path):
+    import paths
+
+    real, link = tmp_path / "real", tmp_path / "link"
+    real.mkdir()
+    link.symlink_to(real)
+    use(tmp_path, f"data:\n  corpus:\n    root: {link}\n")
+    assert str(paths.data("corpus.root")) == str(link)
+    assert paths.lookup("data.corpus.root") == str(link)
+
+
+@pytest.mark.parametrize("value, shown", NOT_A_LOCATION)
+def test_a_data_value_that_is_not_a_location_names_key_and_file(tmp_path, value, shown):
+    import paths
+
+    file = use(tmp_path, f"data:\n  corpus:\n    root: {value}\n    other:\n")
+    calls = [(paths.data, ("corpus.root",), {}),
+             (paths.data, ("corpus.root",), {"required": False, "must_exist": False}),
+             (paths.lookup, ("data.corpus.root",), {}),
+             (paths.describe, (), {})]
+    for call, args, kwargs in calls:
+        message = message_of(call, *args, **kwargs)
+        assert "data.corpus.root" in message
+        assert file.name in message
+        assert shown in message
+    # only the code that uses the key is stopped
+    assert paths.lookup("data.corpus.other") is None
+
+
+@pytest.mark.parametrize("value, shown", NOT_A_LOCATION)
+def test_an_output_value_that_is_not_a_location_names_key_and_file(tmp_path, value, shown):
+    import paths
+
+    file = use(tmp_path, f"outputs:\n  cache: {value}\n")
+    message = message_of(paths.output, "cache")
+    assert "outputs.cache" in message
+    assert file.name in message
+    assert shown in message
+    assert sorted(path.name for path in tmp_path.iterdir()) == [file.name, "paths.test.yaml"]
+
+
+@pytest.mark.parametrize("value, shown", NOT_A_LOCATION)
+def test_an_output_dir_that_is_not_a_location_names_key_and_file(tmp_path, value, shown):
+    import paths
+
+    file = use(tmp_path, f"output_dir: {value}\noutputs:\n  cache: ${{output_dir}}/cache\n")
+    for call, key in ((paths.output, "cache"), (paths.lookup, "outputs.cache"),
+                      (paths.lookup, "output_dir")):
+        message = message_of(call, key)
+        assert "output_dir" in message
+        assert file.name in message
+        assert shown in message
+
+
+def test_output_dir_cannot_use_itself(tmp_path):
+    import paths
+
+    file = use(tmp_path, "output_dir: ${output_dir}/more\n")
+    message = message_of(paths.lookup, "output_dir")
+    assert "output_dir" in message
+    assert file.name in message
+
+
+# --- 3. nothing set, nothing on disk -----------------------------------------
+
+def test_with_every_key_empty_describe_and_lookup_succeed(tmp_path):
+    import paths
+
+    file = use(tmp_path, """\
+        output_dir:
+        outputs:
+          cache: ${output_dir}/cache
+          dist:
+        data:
+          corpus:
+            root:
+            videos:
+          other:
+        """)
+    assert paths.describe() == {
+        "file": str(file),
+        "locations": {"output_dir": None, "outputs.cache": None, "outputs.dist": None,
+                      "data.corpus.root": None, "data.corpus.videos": None},
+    }
+    for key in ("output_dir", "outputs.cache", "outputs.dist", "data.corpus.root",
+                "data.missing.root", "outputs.missing"):
+        assert paths.lookup(key) is None
+    assert sorted(path.name for path in tmp_path.iterdir()) == [file.name, "paths.test.yaml"]
+
+
+def test_describe_and_lookup_check_no_folder(tmp_path):
+    import paths
+
+    use(tmp_path, f"""\
+        output_dir: {tmp_path}/out
+        outputs:
+          cache: ${{output_dir}}/cache
+        data:
+          corpus:
+            root: {tmp_path}/not/there
+        """)
+    assert paths.describe()["locations"] == {
+        "output_dir": f"{tmp_path}/out",
+        "outputs.cache": f"{tmp_path}/out/cache",
+        "data.corpus.root": f"{tmp_path}/not/there",
+    }
+    assert paths.lookup("data.corpus.root") == f"{tmp_path}/not/there"
+    assert not (tmp_path / "out").exists()
+
+
+def test_import_needs_neither_a_file_nor_yaml(tmp_path):
+    # a copy of the module alone in a folder: no paths file beside it, and `yaml`
+    # made impossible to import. Importing must work; asking for a location says why not.
+    shutil.copy(ROOT / "paths.py", tmp_path / "paths.py")
+    code = textwrap.dedent("""\
+        import sys
+        sys.modules["yaml"] = None          # `import yaml` now raises ImportError
+        import paths
+        print("imported")
+        open("paths.uzh.yaml", "w").write("output_dir:\\n")
+        try:
+            paths.lookup("output_dir")
+        except paths.PathsError as error:
+            print(error)
+        """)
+    result = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, check=False,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == "imported"
+    assert "pyyaml" in lines[1]
+
+
+# --- 4. data() ---------------------------------------------------------------
+
+@pytest.fixture
+def corpus(tmp_path):
+    """A paths file with one folder that exists, one that does not, one key not set."""
+    (tmp_path / "poses").mkdir()
+    return use(tmp_path, f"""\
+        data:
+          corpus:
+            root: {tmp_path}/poses
+            gone: {tmp_path}/gone
+            empty:
+        """)
+
+
+def test_data_returns_the_folder_that_exists(corpus, tmp_path):
+    import paths
+
+    assert paths.data("corpus.root") == tmp_path / "poses"
+    assert isinstance(paths.data("corpus.root"), Path)
+
+
+@pytest.mark.parametrize("key", ["corpus.empty", "corpus.absent", "absent.root"])
+def test_data_not_set_names_key_and_file(corpus, key):
+    import paths
+
+    message = message_of(paths.data, key)
+    assert f"data.{key}" in message
+    assert corpus.name in message
+    assert "not set" in message
+
+
+@pytest.mark.parametrize("key", ["corpus.empty", "corpus.absent", "absent.root"])
+def test_data_not_set_is_none_when_not_required(corpus, key):
+    import paths
+
+    assert paths.data(key, required=False) is None
+
+
+def test_data_missing_folder_names_key_folder_and_file(corpus, tmp_path):
+    import paths
+
+    # also for a key that is not required: it is set, so it must be right
+    for kwargs in ({}, {"required": False}):
+        message = message_of(paths.data, "corpus.gone", **kwargs)
+        assert "data.corpus.gone" in message
+        assert str(tmp_path / "gone") in message
+        assert corpus.name in message
+        assert "does not exist" in message
+    assert not (tmp_path / "gone").exists()
+
+
+def test_data_missing_folder_is_returned_when_it_need_not_exist(corpus, tmp_path):
+    import paths
+
+    assert paths.data("corpus.gone", must_exist=False) == tmp_path / "gone"
+    assert not (tmp_path / "gone").exists()
+
+
+# --- 5. output() -------------------------------------------------------------
+
+def test_output_creates_the_folder_and_its_parents(tmp_path):
+    import paths
+
+    use(tmp_path, f"output_dir: {tmp_path}/a/b\noutputs:\n  cache: ${{output_dir}}/cache\n")
+    assert not (tmp_path / "a").exists()
+    assert paths.output("cache") == tmp_path / "a" / "b" / "cache"
+    assert (tmp_path / "a" / "b" / "cache").is_dir()
+    assert paths.output("cache") == tmp_path / "a" / "b" / "cache"      # and again
+
+
+@pytest.mark.parametrize("text, key", [
+    ("outputs:\n  cache:\n", "outputs.cache"),                   # empty
+    ("outputs:\n  dist: {tmp}/dist\n", "outputs.cache"),         # absent
+    ("output_dir: {tmp}/out\n", "outputs.cache"),                # no `outputs` at all
+    ("output_dir:\noutputs:\n  cache: ${{output_dir}}/cache\n", "output_dir"),
+])
+def test_output_not_set_names_key_and_file(tmp_path, text, key):
+    import paths
+
+    file = use(tmp_path, text.format(tmp=tmp_path))
+    message = message_of(paths.output, "cache")
+    assert key in message
+    assert "outputs.cache" in message
+    assert file.name in message
+    assert "not set" in message
+
+
+def test_output_that_cannot_be_created_names_key_folder_and_file(tmp_path):
+    import paths
+
+    (tmp_path / "a_file").write_text("in the way\n")
+    file = use(tmp_path, f"outputs:\n  cache: {tmp_path}/a_file/cache\n")
+    message = message_of(paths.output, "cache")
+    assert "outputs.cache" in message
+    assert str(tmp_path / "a_file" / "cache") in message
+    assert file.name in message
+
+
+# --- 6. the two committed files ----------------------------------------------
+
+def keys_of(file: Path) -> list[str]:
+    import paths
+
+    paths.use_file(file)
+    return list(paths.describe()["locations"])
+
+
+def keys_asked_for(source: str) -> tuple[set[str], list[str]]:
+    """Keys that Python code asks the paths module for, and the calls it cannot read.
+
+    `paths.data("a.b")` asks for `data.a.b`, `paths.output("c")` for `outputs.c`,
+    and `paths.lookup("k")` for `k`. A key that is not a string literal cannot be
+    checked here, so it is reported.
+    """
+    prefix = {"data": "data.", "output": "outputs.", "lookup": ""}
+    keys, unreadable = set(), []
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "paths"
+                and node.func.attr in prefix):
+            continue
+        first = node.args[0] if node.args else None
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            keys.add(prefix[node.func.attr] + first.value)
+        else:
+            unreadable.append(f"line {node.lineno}: {ast.unparse(node)}")
+    return keys, unreadable
+
+
+def keys_asked_for_in_shell(source: str) -> set[str]:
+    """Keys given to `python -m paths` on a command line of a shell script."""
+    keys = set()
+    for line in source.replace("\\\n", " ").splitlines():
+        _, found, arguments = line.partition("-m paths ")
+        if found and not line.lstrip().startswith("#"):
+            keys |= set(re.findall(r"(?<!\S)(?:outputs|data)\.[\w.]+", arguments))
+    return keys
+
+
+def test_key_collector_on_hand_made_snippets():
+    source = textwrap.dedent("""\
+        import paths
+
+        def f(name):
+            a = paths.data("corpus.root")
+            b = paths.data("corpus.videos", required=False)
+            c = paths.output("cache")
+            d = paths.lookup("data.other.root")
+            e = paths.output(name)
+            return paths.describe()
+        """)
+    assert keys_asked_for(source) == (
+        {"data.corpus.root", "data.corpus.videos", "outputs.cache", "data.other.root"},
+        ["line 8: paths.output(name)"])
+    shell = ('# "$PYTHON" -m paths outputs.old\n'
+             '"$PYTHON" -m paths outputs.slurm outputs.dist \\\n'
+             '    data.corpus.root \\\n'
+             '    || die "a location cannot be used"\n')
+    assert keys_asked_for_in_shell(shell) == {"outputs.slurm", "outputs.dist",
+                                              "data.corpus.root"}
+
+
+def test_the_two_committed_files_have_the_same_keys():
+    assert keys_of(UZH) == keys_of(EXAMPLE)
+
+
+def test_example_file_fills_in_the_outputs_and_nothing_else():
+    import paths
+    import yaml
+
+    example = yaml.safe_load(EXAMPLE.read_text())
+    assert list(example) == ["output_dir", "outputs", "data"]
+    assert example["output_dir"] is None
+    assert example["outputs"] == {name: "${output_dir}/" + name
+                                  for name in ("cache", "dist", "wandb", "slurm")}
+    assert example["data"]
+    for corpus, names in example["data"].items():
+        assert names and all(value is None for value in names.values()), corpus
+
+    # so, as it is, the example sets nothing
+    paths.use_file(EXAMPLE)
+    assert set(paths.describe()["locations"].values()) == {None}
+
+
+def test_uzh_file_resolves_every_key():
+    import paths
+
+    paths.use_file(UZH)
+    locations = paths.describe()["locations"]
+    for key, value in locations.items():
+        assert value is not None, key
+        assert os.path.isabs(value) and "$" not in value and "~" not in value, key
+    # the outputs belong to the user who runs the code
+    output_dir = locations["output_dir"]
+    assert getpass.getuser() in Path(output_dir).parts
+    for name in ("cache", "dist", "wandb", "slurm"):
+        assert locations[f"outputs.{name}"] == f"{output_dir}/{name}"
+
+
+def test_every_key_the_code_asks_for_is_in_both_committed_files():
+    asked, unreadable = set(), []
+    for name in project_files(".py"):
+        if name.startswith("tests/"):
+            continue
+        keys, calls = keys_asked_for((ROOT / name).read_text())
+        asked |= keys
+        unreadable += [f"{name}, {call}" for call in calls]
+    for name in project_files(".slurm", ".sh"):
+        asked |= keys_asked_for_in_shell((ROOT / name).read_text())
+
+    assert not unreadable, "write the key as a string literal:\n  " + "\n  ".join(unreadable)
+    for file in (UZH, EXAMPLE):
+        missing = sorted(asked - set(keys_of(file)))
+        assert not missing, f"{file.name} lacks {missing}"
+
+
+def test_git_ignores_the_local_file():
+    result = subprocess.run(["git", "check-ignore", "-q", "paths.local.yaml"],
+                            cwd=ROOT, check=False)
+    assert result.returncode == 0
+    tracked = subprocess.run(["git", "ls-files", "paths.local.yaml"], cwd=ROOT, check=True,
+                             capture_output=True, text=True).stdout
+    assert tracked == ""
+
+
+# --- 7. python -m paths ------------------------------------------------------
+
+def test_command_prints_each_folder_it_was_asked_for(corpus, tmp_path, capsys):
+    import paths
+
+    corpus.write_text(corpus.read_text() + f"outputs:\n  cache: {tmp_path}/out/cache\n")
+    paths.use_file(corpus)
+    assert paths.main(["outputs.cache", "data.corpus.root"]) == 0
+    assert capsys.readouterr().out.splitlines() == [f"{tmp_path}/out/cache",
+                                                    f"{tmp_path}/poses"]
+    assert (tmp_path / "out" / "cache").is_dir()        # checked as output() checks
+
+
+@pytest.mark.parametrize("key, reason", [
+    ("data.corpus.empty", "not set"),
+    ("data.corpus.gone", "does not exist"),
+    ("outputs.cache", "not set"),
+])
+def test_command_prints_the_error_and_fails(corpus, tmp_path, capsys, key, reason):
+    import paths
+
+    # the keys around the bad one are still checked and printed
+    assert paths.main(["data.corpus.root", key, "data.corpus.root"]) != 0
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == [f"{tmp_path}/poses"] * 2
+    assert key in captured.err
+    assert reason in captured.err
+    assert corpus.name in captured.err
+
+
+@pytest.mark.parametrize("key", ["output_dir", "cache", "corpus.root"])
+def test_command_takes_only_output_and_data_keys(corpus, capsys, key):
+    import paths
+
+    assert paths.main([key]) != 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert repr(key) in captured.err
+    assert "outputs.<name>" in captured.err and "data.<corpus>.<name>" in captured.err
+
+
+def test_command_without_a_key_shows_the_file_and_every_location(tmp_path, capsys):
+    import paths
+
+    (tmp_path / "poses").mkdir()
+    file = use(tmp_path, f"""\
+        output_dir: {tmp_path}/out
+        outputs:
+          cache: ${{output_dir}}/cache
+        data:
+          corpus:
+            root: {tmp_path}/poses
+            gone: {tmp_path}/gone
+            empty:
+        """)
+    assert paths.main([]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == ["file", str(file)]
+    rows = [re.fullmatch(r"(ok|missing|not set)\s+(\S+)\s*(\S*)", line).groups()
+            for line in lines[1:]]
+    assert rows == [
+        ("missing", "output_dir", f"{tmp_path}/out"),
+        ("missing", "outputs.cache", f"{tmp_path}/out/cache"),
+        ("ok", "data.corpus.root", f"{tmp_path}/poses"),
+        ("missing", "data.corpus.gone", f"{tmp_path}/gone"),
+        ("not set", "data.corpus.empty", ""),
+    ]
+    assert not (tmp_path / "out").exists()              # it shows, it creates nothing
+
+
+def test_command_without_a_key_fails_on_a_file_it_cannot_read(tmp_path, capsys):
+    import paths
+
+    file = use(tmp_path, "data:\n  corpus:\n    root: relative/folder\n")
+    assert paths.main([]) != 0
+    captured = capsys.readouterr()
+    assert "data.corpus.root" in captured.err
+    assert file.name in captured.err
+
+
+def test_python_m_paths_from_the_shell(tmp_path):
+    # the real command line, on a copy of the module with a paths file beside it
+    shutil.copy(ROOT / "paths.py", tmp_path / "paths.py")
+    (tmp_path / "paths.uzh.yaml").write_text(
+        f"outputs:\n  cache: {tmp_path}/out/cache\ndata:\n  corpus:\n    root:\n")
+
+    def run(*keys: str):
+        return subprocess.run([sys.executable, "-m", "paths", *keys], cwd=tmp_path,
+                              check=False, capture_output=True, text=True)
+
+    good = run("outputs.cache")
+    assert (good.returncode, good.stdout, good.stderr) == (0, f"{tmp_path}/out/cache\n", "")
+    assert (tmp_path / "out" / "cache").is_dir()
+
+    bad = run("outputs.cache", "data.corpus.root")
+    assert bad.returncode != 0
+    assert bad.stdout == f"{tmp_path}/out/cache\n"
+    assert "data.corpus.root" in bad.stderr and "paths.uzh.yaml" in bad.stderr
+    assert "Traceback" not in bad.stderr

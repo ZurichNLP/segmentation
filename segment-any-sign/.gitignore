@@ -24,6 +24,10 @@ experiments/**/logs/
 wandb/
 lightning_logs/
 
+# Locations of one machine or one user; see paths.example.yaml. When this file
+# exists it replaces paths.uzh.yaml, so committing it would change every checkout.
+paths.local.yaml
+
 # Run artefacts. Both are symlinks to /scratch/zifjia/segment-any-sign/ —
 # checkpoints and wandb logs must not sit on /home, which is small.
 dist
