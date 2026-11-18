@@ -30,8 +30,11 @@ Three patches are applied, none of which touch behaviour:
   * `_shared.tfds_dataset` / `.pose_utils` imports are made absolute
   * `mediapipe` is stubbed — `tfds_dataset` imports it only to build
     `FACEMESH_CONTOURS_POINTS`, used solely when `reduce_face=True`
-  * ELAN and CMDI paths are re-resolved by basename into our backup, since the
-    TFDS records point at /shares/volk.cl.uzh/... which we can no longer read
+  * ELAN and CMDI paths are re-resolved by file name into the download archive,
+    since the TFDS records point at a share which we can no longer read
+
+The TFDS folder and the archive are the keys `data.public_dgs_corpus.tfds` and
+`data.public_dgs_corpus.downloads` of the paths file (`../paths.py`).
 
 Output is one JSON per run, holding gold and predicted segments plus frame-level
 BIO labels, consumed by `score.py`.
@@ -53,6 +56,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import paths
 from datasets.public_dgs_corpus import load as dgs_data  # noqa: E402
 
 CACHE = dgs_data.CACHE
@@ -115,12 +119,10 @@ def main() -> None:
     parser.add_argument("--sign-o", type=float, default=DEFAULT_SIGN[1])
     parser.add_argument("--phrase-b", type=float, default=DEFAULT_PHRASE[0])
     parser.add_argument("--phrase-o", type=float, default=DEFAULT_PHRASE[1])
-    parser.add_argument("--tfds-root", default=dgs_data.TFDS_ROOT)
-    parser.add_argument("--backup", default=dgs_data.BACKUP)
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
-    v2023 = dgs_data.vendored(args.backup)
+    v2023 = dgs_data.vendored()
 
     import torch
     from utils.probs_to_segments import probs_to_segments  # noqa: E402
@@ -138,7 +140,7 @@ def main() -> None:
     started = time.time()
     dataset = v2023.get_dataset(name="dgs_corpus", poses="holistic", fps=FPS,
                                 split=args.split, components=COMPONENTS,
-                                data_dir=args.tfds_root,
+                                data_dir=str(paths.data("public_dgs_corpus.tfds")),
                                 hand_normalization=is_e4, optical_flow=is_e4,
                                 classes="bio")
 

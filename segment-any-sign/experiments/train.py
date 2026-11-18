@@ -97,6 +97,8 @@ CACHE_DIR = SCRATCH / "cache"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import paths
+
 
 def main() -> None:
     # Take our flags out of argv first: upstream's args.py calls parse_args() at
@@ -230,7 +232,6 @@ def main() -> None:
     from experiments import dgs_dataset  # noqa: F401
     from experiments import youtube_dataset  # noqa: F401
 
-    from datasets.public_dgs_corpus import load as dgs_data
     from sign_language_segmentation.args import args
 
     # Upstream's args.py prints the parsed Namespace at import — before any of
@@ -243,7 +244,8 @@ def main() -> None:
     if args.datasets == "all":
         # "all" would resolve to whatever happens to be registered; be explicit
         args.datasets = dgs_dataset.DGSCorpusDataset.dataset_name
-    args.corpus = args.poses = dgs_data.BACKUP
+    # recorded, not read here: None in a run whose paths file has no DGS archive
+    args.corpus = args.poses = paths.lookup("data.public_dgs_corpus.downloads")
     args.data_loader = "datasets/public_dgs_corpus/load.py (archive, native fps)"
 
     import sign_language_segmentation.train as upstream_train
@@ -843,12 +845,10 @@ def report_effective_config(args, mine, run_name: str) -> None:
     actively misleading about what is running. It cannot be suppressed from here,
     so this restates the truth after the fact.
     """
-    from datasets.public_dgs_corpus import load as dgs_data
-
     print("\neffective configuration  (supersedes the `Arguments:` line above,"
           "\n                          which upstream prints before any override)"
           f"\n  data        {args.datasets} via {args.data_loader}"
-          f"\n              {dgs_data.BACKUP}"
+          f"\n              {paths.lookup('data.public_dgs_corpus.downloads')}"
           f"\n  phrase gold {mine.phrase}"
           f"\n  run/wandb   {run_name}  ->  project {args.wandb_project}"
           f"\n  levels      {args.levels}"

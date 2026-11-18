@@ -50,7 +50,7 @@ class DGSCorpusDataset(BaseSegmentationDataset):
         body_part_dropout: float = 0.1,
         phrase: str = "glosses",
         limit: int | None = None,
-        backup: str = dgs_data.BACKUP,
+        backup: str | None = None,   # None: the folder of the paths file
         splits_path: str | None = None,
         fps_resample: bool = False,
         tempo_stretch: bool = False,
@@ -116,7 +116,7 @@ class DGSCorpusDataset(BaseSegmentationDataset):
     def from_args(cls, split: Split, args: Namespace, **augment_kwargs) -> DGSCorpusDataset:
         return cls(split=split, phrase=getattr(args, "phrase", "glosses"),
                    limit=getattr(args, "limit", None),
-                   backup=getattr(args, "backup", dgs_data.BACKUP),
+                   backup=getattr(args, "backup", None),
                    splits_path=getattr(args, "splits_path", None),
                    fps_resample=getattr(args, "fps_resample", False),
                    tempo_stretch=getattr(args, "tempo_stretch", False),
