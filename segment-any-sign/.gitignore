@@ -30,6 +30,7 @@ paths.local.yaml
 
 # Run artefacts. `dist` is a link that experiments/train.py makes to the folder
 # `outputs.dist` of the paths file: checkpoints must not sit on /home, which is
-# small. `wandb` is the folder Weights & Biases makes where it is run.
+# small. train.py sends the files of Weights & Biases to `outputs.wandb`; a
+# `wandb` folder appears here only when --wandb_dir names this folder.
 dist
 wandb

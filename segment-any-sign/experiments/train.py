@@ -48,7 +48,8 @@ self-evidently throwaway; a dry run also deletes its own run directory.
 `dist` is a link, made here, to the folder `outputs.dist` of the paths file
 (`../paths.py`): a run folder is `dist/<run>` relative to `segment-any-sign/`,
 here and in upstream's training code, so this script must be run from inside
-`segment-any-sign/`. See `link_dist`.
+`segment-any-sign/`. See `link_dist`. The run files of W&B go to the folder
+`outputs.wandb`, unless `--wandb_dir` names another; see `set_wandb_dir`.
 
 Every run first writes a data report — split sizes, segment counts, label balance
 and correctness checks — to `dist/<run>/data_stats.{json,log}`, and attaches its
@@ -267,6 +268,7 @@ def main() -> None:
     # "segmentation", so our runs do not land in someone else's project.
     if args.wandb_project == "segmentation":
         args.wandb_project = "segment-any-sign"
+    set_wandb_dir(args, rest)
 
     # Upstream's train() instantiates whatever `PoseTaggingModel` names in its own
     # module namespace, so swapping the symbol there is enough to get the extra
@@ -939,6 +941,28 @@ def link_dist(project: Path | None = None) -> Path:
         f"{here / link} is {what}, but outputs.dist is {target} in "
         f"{paths.file_in_use().name}. Move its contents there and remove it, or "
         f"change the key.")
+
+
+def set_wandb_dir(args, argv: list[str]) -> None:
+    """Send the run files of W&B to the folder `outputs.wandb` of the paths file.
+
+    Upstream's default for `--wandb_dir` is the working directory. W&B makes
+    its own `wandb` folder inside the folder it is given, so the files end up in
+    `<outputs.wandb>/wandb/`. The folder is created here, because W&B falls back
+    to a temporary folder, without failing, when it cannot write to the one it
+    was given.
+
+    A `--wandb_dir` on the command line (`argv`) is kept, and under
+    `--no_wandb` no location is asked for and no folder is made.
+    """
+    if args.no_wandb:
+        return
+    for argument in argv:
+        option = argument.split("=", 1)[0]
+        # argparse takes any prefix that fits one option only: --wandb_d is enough
+        if len(option) > len("--wandb_") and "--wandb_dir".startswith(option):
+            return
+    args.wandb_dir = str(paths.output("wandb"))
 
 
 def link_slurm_log(run_dir: Path) -> None:

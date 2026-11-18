@@ -9,6 +9,7 @@ folder of tmp_path that stands for `segment-any-sign/`.
 Each test imports what it tests, so one missing function cannot stop the others.
 """
 
+import argparse
 import os
 from pathlib import Path
 
@@ -152,3 +153,70 @@ def test_link_dist_checks_again_when_another_job_makes_the_link_first(
         with pytest.raises(SystemExit) as stop:
             link_dist(project)
         assert "outputs.dist" in str(stop.value) and str(other) in str(stop.value)
+
+
+# --- set_wandb_dir: the files of Weights & Biases ----------------------------
+
+def message_of(call, *args, **kwargs) -> str:
+    """The message of the PathsError that the call must raise."""
+    import paths
+
+    with pytest.raises(paths.PathsError) as error:
+        call(*args, **kwargs)
+    return str(error.value)
+
+
+def test_set_wandb_dir_uses_the_configured_folder_and_creates_it(tmp_path):
+    from experiments.train import set_wandb_dir
+
+    # "." is upstream's default: W&B would write into the working directory
+    args = argparse.Namespace(no_wandb=False, wandb_dir=".")
+    set_wandb_dir(args, ["--run_name", "00_run", "--device", "cpu"])
+
+    assert args.wandb_dir == str(tmp_path / "outputs" / "wandb")
+    # created here: W&B falls back to a temporary folder when it cannot write
+    assert (tmp_path / "outputs" / "wandb").is_dir()
+
+
+def test_set_wandb_dir_without_wandb_changes_nothing_and_makes_no_folder(tmp_path, set_locations):
+    from experiments.train import set_wandb_dir
+
+    args = argparse.Namespace(no_wandb=True, wandb_dir=".")
+    set_wandb_dir(args, ["--no_wandb"])
+    assert args.wandb_dir == "."
+    assert not (tmp_path / "outputs").exists()
+
+    # and it needs no key
+    set_locations({"outputs.wandb": None})
+    set_wandb_dir(args, ["--no_wandb"])
+    assert args.wandb_dir == "."
+
+
+@pytest.mark.parametrize("option", ["--wandb_dir {folder}", "--wandb_dir={folder}",
+                                    "--wandb_d {folder}"])       # argparse takes a prefix
+def test_set_wandb_dir_keeps_a_folder_given_on_the_command_line(tmp_path, option):
+    from experiments.train import set_wandb_dir
+
+    mine = tmp_path / "mine"
+    args = argparse.Namespace(no_wandb=False, wandb_dir=str(mine))
+    set_wandb_dir(args, ["--run_name", "00_run", *option.format(folder=mine).split()])
+
+    assert args.wandb_dir == str(mine)
+    assert not (tmp_path / "outputs").exists()
+
+
+def test_set_wandb_dir_is_not_misled_by_other_wandb_options(tmp_path):
+    from experiments.train import set_wandb_dir
+
+    args = argparse.Namespace(no_wandb=False, wandb_dir=".")
+    set_wandb_dir(args, ["--wandb_project", "segment-any-sign", "--wandb_entity=team"])
+    assert args.wandb_dir == str(tmp_path / "outputs" / "wandb")
+
+
+def test_set_wandb_dir_without_the_key_names_it(set_locations):
+    from experiments.train import set_wandb_dir
+
+    set_locations({"outputs.wandb": None})
+    args = argparse.Namespace(no_wandb=False, wandb_dir=".")
+    assert "outputs.wandb" in message_of(set_wandb_dir, args, [])
+    assert args.wandb_dir == "."

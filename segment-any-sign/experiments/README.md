@@ -33,6 +33,7 @@ Nothing a run writes is in the repository. Each folder is a key of the paths fil
 | What | Key | Notes |
 |---|---|---|
 | Run folders: checkpoints, `run_config.json`, the data report, figures | `outputs.dist` | A run folder is `dist/<run>` relative to `segment-any-sign/`, in `train.py` and in upstream's training code. `train.py` therefore makes `dist` a link to this folder when it starts, and must be run from inside `segment-any-sign/`. If `dist` exists and leads somewhere else, it stops and says what to move. `add_result_row.py`, `eval_youtube.py` and `plot_segmentation.py` read `<outputs.dist>/<run>` |
+| Run files of Weights & Biases | `outputs.wandb` | W&B makes its own `wandb` folder inside the folder it is given, so the files are in `<outputs.wandb>/wandb/`. `--wandb_dir` on the command line is kept. With `--no_wandb` the key is not needed |
 | Caches: YouTube-SL-25 pose headers, cues and alignment measures, and class weights | `outputs.cache` | Rebuilt from the data when missing |
 
 ## What differs 2023 vs 2026, apart from the architecture
