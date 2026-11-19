@@ -6,7 +6,9 @@ Run from `segment-any-sign/`:
 Each test writes a small paths file by hand in pytest's tmp_path and makes the
 module read it with `paths.use_file`. No test reads `paths.local.yaml`, and the
 only tests that read `paths.uzh.yaml` and `paths.example.yaml` are the ones about
-those two committed files; they create no folder.
+those two committed files; they create no folder outside tmp_path.
+The tests of section 8 need a folder that the user cannot enter, so they are
+skipped for root.
 Each test imports what it tests, so one missing module cannot stop the others.
 """
 
@@ -225,6 +227,141 @@ def test_output_dir_cannot_use_itself(tmp_path):
     message = message_of(paths.lookup, "output_dir")
     assert "output_dir" in message
     assert file.name in message
+
+
+@pytest.mark.parametrize("written", [
+    "{tmp}/$USER/x",                # an environment variable: none is read
+    "{tmp}/$user/x",                # a variable is written with braces
+    "{tmp}/${{user}}/$HOME",        # beside a variable that exists
+    "{tmp}/${{user/x",              # braces that are not closed
+    "{tmp}/$(id -un)/x",            # a command
+    "{tmp}/$$/x",
+    "{tmp}/x$",
+])
+def test_a_dollar_outside_the_two_variables_is_rejected_and_creates_nothing(tmp_path, written):
+    import paths
+
+    value = written.format(tmp=tmp_path)
+    file = use(tmp_path, f"""\
+        output_dir: {value}
+        outputs:
+          cache: ${{output_dir}}/cache
+          dist: {value}
+        data:
+          corpus:
+            root: {value}
+            other: {tmp_path}/other
+        """)
+    # the call, and the key its message names: the one where the `$` is written
+    calls = [(paths.output, ("dist",), {}, "outputs.dist"),
+             (paths.output, ("cache",), {}, "output_dir"),
+             (paths.lookup, ("outputs.dist",), {}, "outputs.dist"),
+             (paths.lookup, ("output_dir",), {}, "output_dir"),
+             (paths.data, ("corpus.root",), {"must_exist": False}, "data.corpus.root"),
+             (paths.data, ("corpus.root",), {"required": False, "must_exist": False},
+              "data.corpus.root"),
+             (paths.lookup, ("data.corpus.root",), {}, "data.corpus.root"),
+             (paths.describe, (), {}, "output_dir")]
+    for call, args, kwargs, key in calls:
+        message = message_of(call, *args, **kwargs)
+        assert key in message
+        assert file.name in message
+        assert value in message
+        assert "${user}" in message and "${output_dir}" in message     # what can be written
+    # only the code that uses such a key is stopped, and no folder was created
+    assert paths.lookup("data.corpus.other") == f"{tmp_path}/other"
+    assert sorted(path.name for path in tmp_path.iterdir()) == [file.name, "paths.test.yaml"]
+
+
+def user_name_file(tmp_path: Path) -> Path:
+    """A paths file where `${user}` is written in `output_dir` and in one data key."""
+    return use(tmp_path, f"""\
+        output_dir: {tmp_path}/${{user}}/out
+        outputs:
+          cache: ${{output_dir}}/cache
+          plain: {tmp_path}/plain
+        data:
+          corpus:
+            root: {tmp_path}/shares/${{user}}
+            other: {tmp_path}/other
+        """)
+
+
+def test_a_user_name_that_cannot_be_found_names_key_and_file(tmp_path, no_user_name):
+    import paths
+
+    file = user_name_file(tmp_path)
+    # the call, and the key its message names: the one where `${user}` is written
+    calls = [(paths.lookup, ("output_dir",), {}, "output_dir"),
+             (paths.output, ("cache",), {}, "output_dir"),
+             (paths.lookup, ("outputs.cache",), {}, "output_dir"),
+             (paths.data, ("corpus.root",), {}, "data.corpus.root"),
+             (paths.data, ("corpus.root",), {"required": False, "must_exist": False},
+              "data.corpus.root"),
+             (paths.lookup, ("data.corpus.root",), {}, "data.corpus.root"),
+             (paths.describe, (), {}, "output_dir")]
+    for call, args, kwargs, key in calls:
+        message = message_of(call, *args, **kwargs)
+        assert key in message
+        assert file.name in message
+        assert "user name" in message
+        assert "without ${user}" in message                # what to do about it
+    # a key that does not use ${user} is not stopped
+    assert paths.lookup("data.corpus.other") == f"{tmp_path}/other"
+    assert paths.output("plain") == tmp_path / "plain"
+    assert sorted(path.name for path in tmp_path.iterdir()) == [file.name, "paths.test.yaml",
+                                                                "plain"]
+
+
+def test_a_user_name_that_cannot_be_found_in_the_default_file_points_to_a_local_file(
+        two_files, tmp_path, no_user_name):
+    import paths
+
+    # the default file is committed: the folder is written in a local file instead
+    _, default = two_files
+    default.write_text(f"output_dir: {tmp_path}/${{user}}/out\n")
+    message = message_of(paths.lookup, "output_dir")
+    assert "output_dir" in message and "paths.uzh.yaml" in message
+    assert "paths.local.yaml" in message and "without ${user}" in message
+
+
+# what `getpass.getuser()` raises without a user name depends on the Python version
+@pytest.mark.parametrize("error", [KeyError("getpwuid(): uid not found: 1234"),
+                                   ImportError("No module named 'pwd'"),
+                                   OSError("No username set in the environment")],
+                         ids=["KeyError", "ImportError", "OSError"])
+def test_a_user_name_error_of_any_python_version_is_a_paths_error(tmp_path, monkeypatch, error):
+    import paths
+
+    def no_user():
+        raise error
+
+    monkeypatch.setattr(getpass, "getuser", no_user)
+    file = user_name_file(tmp_path)
+    message = message_of(paths.lookup, "output_dir")
+    assert "output_dir" in message and file.name in message
+    assert "without ${user}" in message
+
+
+def test_command_without_a_key_goes_on_when_the_user_name_cannot_be_found(tmp_path, capsys,
+                                                                         no_user_name):
+    import paths
+
+    file = user_name_file(tmp_path)
+    assert paths.main([]) != 0
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert lines[0].split() == ["file", str(file)]
+    # the keys that do not use ${user} are listed
+    assert [line.split() for line in lines[1:]] == [
+        ["missing", "outputs.plain", f"{tmp_path}/plain"],
+        ["missing", "data.corpus.other", f"{tmp_path}/other"],
+    ]
+    # and one line for each of the three others: output_dir, outputs.cache, data.corpus.root
+    errors = captured.err.splitlines()
+    assert len(errors) == 3
+    for key, error in zip(("output_dir", "output_dir", "data.corpus.root"), errors):
+        assert key in error and file.name in error and "without ${user}" in error
 
 
 # --- 3. nothing set, nothing on disk -----------------------------------------
@@ -622,3 +759,208 @@ def test_python_m_paths_from_the_shell(tmp_path):
     assert bad.stdout == f"{tmp_path}/out/cache\n"
     assert "data.corpus.root" in bad.stderr and "paths.uzh.yaml" in bad.stderr
     assert "Traceback" not in bad.stderr
+
+
+# --- 8. a folder that cannot be reached --------------------------------------
+
+@pytest.fixture
+def closed(tmp_path):
+    """A folder that exists, inside a parent of mode 000: only root can enter it."""
+    if os.geteuid() == 0:
+        pytest.skip("root enters a folder of mode 000, so no folder is out of its reach")
+    parent = tmp_path / "closed"
+    (parent / "folder").mkdir(parents=True)
+    parent.chmod(0o000)
+    yield parent / "folder"
+    parent.chmod(0o700)                                 # so that pytest can remove it
+
+
+def test_data_with_a_folder_that_cannot_be_reached_names_key_and_file(closed, tmp_path):
+    import paths
+
+    file = use(tmp_path, f"data:\n  corpus:\n    root: {closed}\n    deeper: {closed}/a/b\n")
+    for key, folder in (("corpus.root", closed), ("corpus.deeper", closed / "a" / "b")):
+        for kwargs in ({}, {"required": False}):
+            message = message_of(paths.data, key, **kwargs)
+            assert f"data.{key}" in message
+            assert str(folder) in message
+            assert file.name in message
+            assert "cannot be reached" in message
+    # asked not to look, it does not look; and neither do lookup() and describe()
+    assert paths.data("corpus.root", must_exist=False) == closed
+    assert paths.lookup("data.corpus.root") == str(closed)
+    assert paths.describe()["locations"]["data.corpus.deeper"] == f"{closed}/a/b"
+
+
+def test_output_with_a_folder_that_cannot_be_reached_names_key_and_file(closed, tmp_path):
+    import paths
+
+    read_only = tmp_path / "read_only"
+    read_only.mkdir()
+    file = use(tmp_path, f"""\
+        outputs:
+          cache: {closed}
+          dist: {closed.parent}/new/dist
+          wandb: {read_only}/wandb
+        """)
+    for name, folder in (("cache", closed), ("dist", closed.parent / "new" / "dist")):
+        message = message_of(paths.output, name)
+        assert f"outputs.{name}" in message
+        assert str(folder) in message
+        assert file.name in message
+        assert "cannot be reached" in message
+
+    # a parent that can be entered but not written is another case: nothing is out of reach
+    read_only.chmod(0o500)
+    try:
+        message = message_of(paths.output, "wandb")
+    finally:
+        read_only.chmod(0o700)
+    assert "outputs.wandb" in message and str(read_only / "wandb") in message
+    assert file.name in message
+    assert "cannot be created" in message and "cannot be reached" not in message
+
+
+def test_command_prints_the_error_for_a_folder_that_cannot_be_reached(closed, tmp_path, capsys):
+    import paths
+
+    (tmp_path / "poses").mkdir()
+    file = use(tmp_path, f"""\
+        outputs:
+          cache: {closed}
+        data:
+          corpus:
+            root: {tmp_path}/poses
+            closed: {closed}
+        """)
+    # the keys around the two bad ones are still checked and printed
+    assert paths.main(["data.corpus.root", "data.corpus.closed", "outputs.cache",
+                       "data.corpus.root"]) != 0
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == [f"{tmp_path}/poses"] * 2
+    errors = captured.err.splitlines()
+    assert len(errors) == 2
+    for key, error in zip(("data.corpus.closed", "outputs.cache"), errors):
+        assert key in error and str(closed) in error and file.name in error
+        assert "cannot be reached" in error
+
+
+def test_command_without_a_key_goes_on_after_a_folder_that_cannot_be_reached(closed, tmp_path,
+                                                                            capsys):
+    import paths
+
+    (tmp_path / "poses").mkdir()
+    file = use(tmp_path, f"""\
+        output_dir: {tmp_path}/out
+        outputs:
+          cache: {closed}
+          dist: ${{output_dir}}/dist
+        data:
+          corpus:
+            closed: {closed}/deeper
+            root: {tmp_path}/poses
+            empty:
+        """)
+    assert paths.main([]) != 0
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert lines[0].split() == ["file", str(file)]
+    # every key whose folder can be looked at is listed, also after one that cannot
+    rows = [re.fullmatch(r"(ok|missing|not set)\s+(\S+)\s*(\S*)", line).groups()
+            for line in lines[1:]]
+    assert rows == [
+        ("missing", "output_dir", f"{tmp_path}/out"),
+        ("missing", "outputs.dist", f"{tmp_path}/out/dist"),
+        ("ok", "data.corpus.root", f"{tmp_path}/poses"),
+        ("not set", "data.corpus.empty", ""),
+    ]
+    # and the two that cannot are named, each with its folder and the file
+    errors = captured.err.splitlines()
+    assert len(errors) == 2
+    for (key, folder), error in zip((("outputs.cache", closed),
+                                     ("data.corpus.closed", closed / "deeper")), errors):
+        assert key in error and str(folder) in error and file.name in error
+        assert "cannot be reached" in error
+    assert not (tmp_path / "out").exists()              # it shows, it creates nothing
+
+
+def test_python_m_paths_shows_no_traceback_for_a_folder_that_cannot_be_reached(closed,
+                                                                               tmp_path):
+    # the real command line, on a copy of the module with a paths file beside it
+    shutil.copy(ROOT / "paths.py", tmp_path / "paths.py")
+    (tmp_path / "poses").mkdir()
+    (tmp_path / "paths.uzh.yaml").write_text(
+        f"data:\n  corpus:\n    closed: {closed}\n    root: {tmp_path}/poses\n")
+
+    def run(*keys: str):
+        return subprocess.run([sys.executable, "-m", "paths", *keys], cwd=tmp_path,
+                              check=False, capture_output=True, text=True)
+
+    for result, printed in ((run(), ["file", "ok"]),
+                            (run("data.corpus.closed", "data.corpus.root"),
+                             [f"{tmp_path}/poses"])):
+        assert result.returncode != 0
+        assert [line.split()[0] for line in result.stdout.splitlines()] == printed
+        assert "Traceback" not in result.stderr
+        assert len(result.stderr.splitlines()) == 1
+        assert "data.corpus.closed" in result.stderr and "paths.uzh.yaml" in result.stderr
+        assert "cannot be reached" in result.stderr
+
+
+# --- 9. the paths file that conftest.py gives every test ---------------------
+
+def with_a_comment_on_every_line(text: str) -> str:
+    """The same YAML, with a comment added above it and at the end of each line."""
+    return "# added above\n" + "".join(f"{line}  # added\n" if line.strip() else "\n"
+                                       for line in text.splitlines())
+
+
+@pytest.mark.parametrize("text_of_the_example", ["as committed", "with a comment on every line",
+                                                 "as a YAML writer writes it"])
+def test_the_paths_file_of_the_tests_does_not_depend_on_the_text_of_the_example(
+        tmp_path, text_of_the_example):
+    import yaml
+
+    committed = EXAMPLE.read_text()
+    text = {"as committed": committed,
+            "with a comment on every line": with_a_comment_on_every_line(committed),
+            "as a YAML writer writes it": yaml.safe_dump(yaml.safe_load(committed),
+                                                         sort_keys=False)}[text_of_the_example]
+    assert yaml.safe_load(text) == yaml.safe_load(committed)    # the same keys and values
+    assert (text == committed) == (text_of_the_example == "as committed")
+
+    # a copy of the project that holds what the fixture needs, and one test that uses
+    # it, run by pytest as the tests of the project are
+    project = tmp_path / "project"
+    (project / "tests").mkdir(parents=True)
+    shutil.copy(ROOT / "paths.py", project / "paths.py")
+    shutil.copy(ROOT / "tests" / "conftest.py", project / "tests" / "conftest.py")
+    (project / "tests" / "__init__.py").write_text("")
+    (project / "pytest.ini").write_text("[pytest]\n")
+    (project / "paths.example.yaml").write_text(text)
+    (project / "tests" / "test_fixture.py").write_text(textwrap.dedent("""\
+        from pathlib import Path
+
+        import paths
+
+
+        def test_every_output_is_inside_tmp_path(tmp_path):
+            assert Path(paths.__file__).parent == Path(__file__).parents[1]
+            assert paths.file_in_use().parent == tmp_path
+            locations = paths.describe()["locations"]
+            assert locations.pop("output_dir") == str(tmp_path / "outputs")
+            outputs = {key: folder for key, folder in locations.items()
+                       if key.startswith("outputs.")}
+            assert outputs == {f"outputs.{name}": str(tmp_path / "outputs" / name)
+                               for name in ("cache", "dist", "wandb", "slurm")}
+            data = {key: folder for key, folder in locations.items() if key not in outputs}
+            assert data and all(key.startswith("data.") for key in data)
+            assert set(data.values()) == {None}
+            assert paths.output("cache") == tmp_path / "outputs" / "cache"
+        """))
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         f"--basetemp={tmp_path / 'tmp'}", "tests"],
+        cwd=project, check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout

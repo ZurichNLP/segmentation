@@ -104,7 +104,7 @@ python -m paths                          # the file in use, and each location: o
 python -m paths outputs.cache data.youtube_sl25.root   # check these as the code does, and print them
 ```
 
-A location is checked when code uses it, not before, so a key you leave empty stops only the code that needs it. An output folder shown as `missing` is created when it is first used. The `sas2023` environment reads the same file, so it needs `pyyaml` too: an environment built before this file existed needs `pip install pyyaml`.
+A location is checked when code uses it, not before, so a key you leave empty stops only the code that needs it. An output folder shown as `missing` is created when it is first used. A folder that cannot be reached, for example one inside the scratch folder of another user, is an error that names the key and the file, also in `python -m paths`, which then goes on with the other keys. The `sas2023` environment reads the same file, so it needs `pyyaml` too: an environment built before this file existed needs `pip install pyyaml`.
 
 ## Write-up
 

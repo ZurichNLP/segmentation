@@ -17,8 +17,9 @@ when it is asked for, so a missing one stops only the code that needs it. The
 file is chosen and parsed on the first call and kept in memory.
 
 A value is an absolute path. Two variables exist: `${user}`, the system user
-name, and `${output_dir}`, the value of the key `output_dir`. A value is used as
-written after substitution: no link is resolved and `~` is not expanded.
+name, and `${output_dir}`, the value of the key `output_dir`. Any other `$` is
+an error: no environment variable is read. A value is used as written after
+substitution: no link is resolved and `~` is not expanded.
 
 From the command line, inside `segment-any-sign/`:
 
@@ -27,13 +28,16 @@ From the command line, inside `segment-any-sign/`:
 
 Without a key it shows every location as `ok`, `missing` or `not set`, and
 creates nothing; an output shown as `missing` is created when it is first used.
-With keys it checks each one as `output()` or `data()` does and prints the
-folder, or prints the error and exits with a non-zero status.
+A key whose value cannot be used, or whose folder cannot be reached, gets its
+error instead of a line: the other keys are still shown, and the exit status
+is non-zero. With keys it checks each one as `output()` or `data()` does and
+prints the folder, or prints the error and exits with a non-zero status.
 """
 
 from __future__ import annotations
 
 import argparse
+import errno
 import getpass
 import os
 import re
@@ -46,6 +50,9 @@ DEFAULT_FILE = ROOT / "paths.uzh.yaml"
 EXAMPLE_NAME = "paths.example.yaml"
 
 _VARIABLE = re.compile(r"\$\{([^}]*)\}")
+# the errors of `os.stat` that mean "not there", the ones `Path.exists()` reads
+# so on Python 3.11; any other error means that the folder cannot be reached
+_NOT_THERE = (errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP)
 
 _override: Path | None = None                     # set by use_file()
 _read: tuple[Path, dict[str, object]] | None = None   # the file read, and its keys as written
@@ -79,7 +86,8 @@ def data(key: str, *, required: bool = True, must_exist: bool = True) -> Path | 
     """The folder of the key `data.<key>`, where `key` is `<corpus>.<name>`.
 
     Not set: PathsError, or None when `required` is false. Set, but the folder is
-    not on this machine: PathsError, unless `must_exist` is false.
+    not on this machine or cannot be reached: PathsError, unless `must_exist` is
+    false, which looks at nothing.
     """
     file, written = _load()
     try:
@@ -88,19 +96,23 @@ def data(key: str, *, required: bool = True, must_exist: bool = True) -> Path | 
         if required:
             raise
         return None
-    if must_exist and not folder.exists():
+    if must_exist and not _is_there(f"data.{key}", folder, file):
         raise PathsError(f"data.{key} is {folder} in {file.name}, but that folder does not "
                          f"exist on this machine. {_hint(file)}")
     return folder
 
 
 def output(name: str) -> Path:
-    """The folder of the key `outputs.<name>`, created with its parents when missing."""
+    """The folder of the key `outputs.<name>`, created with its parents when missing.
+
+    PathsError when it cannot be reached or cannot be created.
+    """
     file, written = _load()
     folder = Path(_resolve(f"outputs.{name}", written, file))
     try:
         folder.mkdir(parents=True, exist_ok=True)
     except OSError as error:
+        _is_there(f"outputs.{name}", folder, file)      # PathsError when it cannot be reached
         raise PathsError(f"outputs.{name} is {folder} in {file.name}, but that folder "
                          f"cannot be created: {error}") from error
     return folder
@@ -186,11 +198,15 @@ def _resolve(key: str, written: dict[str, object], file: Path) -> str:
         raise _NotSet(f"{key} is not set in {file.name}. {_hint(file)}")
     if not isinstance(value, str):
         raise PathsError(f"{key} is {value!r} in {file.name}, which is not a path.")
+    if "$" in _VARIABLE.sub("", value):
+        raise PathsError(f"{key} is {value} in {file.name}, but a `$` in it is not part of "
+                         f"${{user}} or ${{output_dir}}, the two variables. No environment "
+                         f"variable is read: for the user name, write ${{user}}.")
 
     def variable(match: re.Match) -> str:
         name = match.group(1)
         if name == "user":
-            return getpass.getuser()
+            return _user(key, value, file)
         if name == "output_dir" and key != "output_dir":
             try:
                 return _resolve("output_dir", written, file)
@@ -208,6 +224,39 @@ def _resolve(key: str, written: dict[str, object], file: Path) -> str:
         raise PathsError(f"{key} is {value} in {file.name}, which is not an absolute path. "
                          f"`~` is not expanded: write the folder in full, or with ${{user}}.")
     return str(Path(location))
+
+
+def _user(key: str, value: str, file: Path) -> str:
+    """The system user name, for `${user}` in the value of `key`."""
+    try:
+        return getpass.getuser()
+    except (KeyError, ImportError, OSError) as error:
+        # nothing in the environment names the user and the password database has
+        # no entry for the account, as with an arbitrary uid in a container. Which
+        # of the three is raised depends on the Python version.
+        where = (f"Copy {file.name} to {LOCAL_FILE.name} and write the folder there"
+                 if file == DEFAULT_FILE else "Write the folder")
+        raise PathsError(f"{key} is {value} in {file.name}, but the user name of this "
+                         f"account cannot be found. {where} without ${{user}}.") from error
+
+
+def _is_there(key: str, folder: Path, file: Path) -> bool:
+    """Whether the folder of `key` exists. PathsError when it cannot be reached.
+
+    A folder cannot be reached when a folder above it cannot be entered, for
+    example the scratch folder of another user. `Path.exists()` is not used:
+    on Python 3.11 it raises PermissionError there, on 3.14 it answers False.
+    """
+    try:
+        os.stat(folder)
+    except OSError as error:
+        if error.errno in _NOT_THERE:
+            return False
+        raise PathsError(f"{key} is {folder} in {file.name}, but that folder cannot be "
+                         f"reached: {error}") from error
+    except ValueError:                                # a path that the system cannot hold
+        return False
+    return True
 
 
 def _hint(file: Path) -> str:
@@ -233,7 +282,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _show() -> int:
-    """Every location of the file with `ok`, `missing` or `not set`. Creates nothing."""
+    """Every location of the file with `ok`, `missing` or `not set`. Creates nothing.
+
+    A key that cannot be shown so gets its error, and the listing goes on.
+    """
     try:
         file, written = _load()
     except PathsError as error:
@@ -245,11 +297,12 @@ def _show() -> int:
     for key in written:
         try:
             location = lookup(key)
+            state = ("not set" if location is None
+                     else "ok" if _is_there(key, Path(location), file) else "missing")
         except PathsError as error:
             print(f"paths: {error}", file=sys.stderr)
             failed = True
             continue
-        state = "not set" if location is None else "ok" if Path(location).exists() else "missing"
         print(f"{state:<7}  {key:<{width}}  {location or ''}".rstrip(), flush=True)
     return 1 if failed else 0
 

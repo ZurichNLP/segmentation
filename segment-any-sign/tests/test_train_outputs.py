@@ -310,6 +310,20 @@ def test_slurm_log_warning_never_raises(tmp_path):
     assert slurm_log_warning(str(tmp_path / "anywhere" / "job-1.out")) is None
 
 
+def test_slurm_log_warning_never_raises_when_the_user_name_cannot_be_found(tmp_path,
+                                                                          no_user_name):
+    import paths
+    from experiments.train import slurm_log_warning
+
+    file = tmp_path / "with_user.yaml"
+    file.write_text(f"outputs:\n  slurm: {tmp_path}/${{user}}/slurm\n")
+    paths.use_file(file)
+    assert slurm_log_warning(str(tmp_path / "anywhere" / "job-1.out")) is None
+    # the paths module says why, to the code that asks for the folder
+    with pytest.raises(paths.PathsError):
+        paths.lookup("outputs.slurm")
+
+
 def test_link_slurm_log_prints_the_warning(tmp_path, monkeypatch, capsys):
     import subprocess
 
