@@ -8,8 +8,9 @@
 # (anywhere else) to paths.local.yaml and edit the copy. paths.local.yaml is
 # not committed. paths.example.yaml says what each folder must contain.
 #
-# Two variables exist: ${user}, the system user name, and ${output_dir}. Any
-# other `$` is an error: $USER and other environment variables are not read.
+# Two variables exist: ${user}, the name of the account that runs the code
+# (what SLURM writes for %u, whatever $USER says), and ${output_dir}. Any
+# other `$` is an error: a value cannot name an environment variable.
 # Every location is an absolute path. A location is checked when code uses
 # it, not before. `python -m paths` shows the file in use and each location.
 

@@ -93,7 +93,7 @@ See [`benchmark/`](benchmark/) for how the two are used together, and [`experime
 
 Every folder outside the repository (data, caches, checkpoints, logs) is a key in one paths file, and [`paths.py`](paths.py) is the only module that reads it.
 
-- `paths.uzh.yaml` holds the locations on the UZH cluster. It is read when `paths.local.yaml` does not exist, so at UZH there is nothing to set up: outputs go to `/scratch/<your user>/segment-any-sign`.
+- `paths.uzh.yaml` holds the locations on the UZH cluster. It is read when `paths.local.yaml` does not exist, so at UZH there is no paths file to write: outputs go to `/scratch/<your user>/segment-any-sign`. One folder must be created by hand, once, before the first SLURM job: the log folder, with `python -m paths outputs.slurm`, because SLURM opens the log before the job script runs (see [`experiments/`](experiments/README.md#where-a-run-writes)).
 - `paths.local.yaml`, when it exists, is the only file read. The two files are never merged, so it must hold every key you use. It is not committed.
 - `paths.example.yaml` is the template, and says what each folder must contain.
 

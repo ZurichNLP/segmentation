@@ -50,6 +50,8 @@ self-evidently throwaway; a dry run also deletes its own run directory.
 here and in upstream's training code, so this script must be run from inside
 `segment-any-sign/`. See `link_dist`. The run files of W&B go to the folder
 `outputs.wandb`, unless `--wandb_dir` names another; see `set_wandb_dir`.
+The whole paths file is read when the run starts: a value that is not a
+location stops it there, also in a key this run does not use.
 
 Every run first writes a data report — split sizes, segment counts, label balance
 and correctness checks — to `dist/<run>/data_stats.{json,log}`, and attaches its
@@ -233,8 +235,13 @@ def main() -> None:
 
     from sign_language_segmentation.args import args
 
-    # after the arguments, so that --help needs no location; before anything
-    # that writes below dist/
+    # After the arguments, so that --help needs no location, and before any
+    # work: every value of the paths file must be a location, also in a key
+    # this run does not use, because run_config.json records them all, and
+    # `write_run_config` runs only after the class weights and the data report.
+    paths.describe()
+
+    # before anything that writes below dist/
     link_dist()
 
     # Upstream's args.py prints the parsed Namespace at import — before any of

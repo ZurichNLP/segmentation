@@ -7,14 +7,22 @@ Folders and links are real ones, in pytest's tmp_path: the paths file of each
 test puts every output there (see conftest.py), and the working directory is a
 folder of tmp_path that stands for `segment-any-sign/`.
 Each test imports what it tests, so one missing function cannot stop the others.
+
+The two tests of `main()` import the dataset modules, which are built on the
+upstream package. They are marked with `needs` (see test_locations.py) and
+skipped, with the missing packages named, where they are not installed.
 """
 
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
+
+# `main()` imports the dataset modules, which are built on the upstream package
+from tests.test_locations import UPSTREAM, needs
 
 
 @pytest.fixture
@@ -348,3 +356,52 @@ def test_link_slurm_log_prints_the_warning(tmp_path, monkeypatch, capsys):
     assert os.readlink(tmp_path / "run_b" / "slurm.out") == str(outside)     # linked all the same
     printed = capsys.readouterr().out
     assert "outputs.slurm" in printed and str(outside) in printed
+
+
+# --- main: the paths file is checked before any work -------------------------
+
+def run_main(monkeypatch, *arguments: str) -> None:
+    """`python experiments/train.py ARGUMENTS`, in this process."""
+    from experiments import train
+
+    monkeypatch.setattr(sys, "argv", ["train.py", *arguments])
+    # upstream's args.py parses the command line when it is imported, so it is
+    # imported anew: the arguments of another test must not be the ones in use
+    monkeypatch.delitem(sys.modules, "sign_language_segmentation.args", raising=False)
+    train.main()
+
+
+@needs(*UPSTREAM)
+def test_main_stops_before_any_work_on_a_value_that_is_not_a_location(
+        project, tmp_path, monkeypatch, paths_file, set_locations):
+    import paths
+
+    # in a key that a training run never asks for: run_config.json records every
+    # key, and it is written only after the class weights and the data report
+    set_locations({"data.ncslgr.root": "relative/folder"})
+
+    with pytest.raises(paths.PathsError) as error:
+        run_main(monkeypatch, "--dry-run", "--no_wandb", "--device", "cpu",
+                 "--limit", "2", "--datasets", "dgs_corpus")
+    message = str(error.value)
+    assert "data.ncslgr.root" in message
+    assert paths_file.name in message
+    assert "relative/folder" in message
+    # it stopped before `link_dist`, the first thing that writes: no link, no folder
+    assert list(project.iterdir()) == []
+    assert not (tmp_path / "outputs").exists()
+
+
+@needs(*UPSTREAM)
+def test_main_with_help_needs_no_location(project, tmp_path, monkeypatch, capsys):
+    import paths
+
+    # no paths file at all: asking for any location would be a PathsError
+    paths.use_file(tmp_path / "no_such_file.yaml")
+
+    with pytest.raises(SystemExit) as stop:
+        run_main(monkeypatch, "--help")
+    assert stop.value.code == 0
+    assert "usage:" in capsys.readouterr().out
+    assert list(project.iterdir()) == []
+    assert not (tmp_path / "outputs").exists()

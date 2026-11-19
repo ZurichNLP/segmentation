@@ -37,7 +37,7 @@ Nothing a run writes is in the repository. Each folder is a key of the paths fil
 | Caches: YouTube-SL-25 pose headers, cues and alignment measures, and class weights | `outputs.cache` | Rebuilt from the data when missing |
 | SLURM logs | `outputs.slurm` | SLURM cannot read the paths file: it takes the folder from the `#SBATCH --output` line of [`pretrain_youtube.slurm`](pretrain_youtube.slurm), written with SLURM's `%u` as `/scratch/<user>/segment-any-sign/slurm`. That is `outputs.slurm` as long as `output_dir` is `/scratch/<user>/segment-any-sign`; keep the two the same. `train.py` links the log into the run folder as `slurm.out`, and prints a warning into the log when it is not in `outputs.slurm` |
 
-`run_config.json` records, under `paths`, the paths file the run read and the folder of every key in it.
+`run_config.json` records, under `paths`, the paths file the run read and the folder of every key in it. So `train.py` reads the whole file when it starts, before any work: a value that is not a location stops the run there, with an error that names the key, also in a key the run does not use. A dry run does the same. `--help` needs no location.
 
 To submit the pretraining job, from inside `segment-any-sign/` with the `sas` environment active:
 

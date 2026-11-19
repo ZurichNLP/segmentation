@@ -5,8 +5,9 @@
 # it is never merged with paths.uzh.yaml. A key you leave empty stops only
 # the code that uses it, with an error that names the key.
 #
-# Two variables exist: ${user}, the system user name, and ${output_dir}. Any
-# other `$` is an error: $USER and other environment variables are not read.
+# Two variables exist: ${user}, the name of the account that runs the code
+# (what SLURM writes for %u, whatever $USER says), and ${output_dir}. Any
+# other `$` is an error: a value cannot name an environment variable.
 # Every location is an absolute path. `python -m paths` shows the result.
 
 # Folder for everything the code writes. A checkpoint is about 68 MB and each

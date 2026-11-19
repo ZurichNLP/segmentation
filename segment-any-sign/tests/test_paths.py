@@ -166,6 +166,55 @@ def test_user_and_output_dir_are_substituted(tmp_path):
     assert paths.lookup("outputs.cache") == f"{tmp_path}/{user}/out/cache"
 
 
+# `getpass.getuser()` answers with the first of LOGNAME, USER, LNAME and USERNAME that is set
+@pytest.mark.parametrize("renamed", [("LOGNAME",), ("USER",), ("LOGNAME", "USER")],
+                         ids=["LOGNAME", "USER", "LOGNAME and USER"])
+def test_user_is_the_account_of_the_process_whatever_the_environment_says(tmp_path, monkeypatch,
+                                                                          renamed):
+    import pwd
+
+    import paths
+
+    account = pwd.getpwuid(os.getuid()).pw_name          # what SLURM's %u means
+    for name in ("LOGNAME", "USER", "LNAME", "USERNAME"):
+        if name in renamed:
+            monkeypatch.setenv(name, "somebody_else")
+        else:
+            monkeypatch.delenv(name, raising=False)
+    use(tmp_path, f"""\
+        output_dir: {tmp_path}/${{user}}/out
+        outputs:
+          cache: ${{output_dir}}/cache
+        data:
+          corpus:
+            root: {tmp_path}/shares/${{user}}
+        """)
+    assert paths.describe()["locations"] == {
+        "output_dir": f"{tmp_path}/{account}/out",
+        "outputs.cache": f"{tmp_path}/{account}/out/cache",
+        "data.corpus.root": f"{tmp_path}/shares/{account}",
+    }
+    assert paths.output("cache") == tmp_path / account / "out" / "cache"
+    assert not (tmp_path / "somebody_else").exists()
+
+
+def test_user_is_taken_from_the_environment_only_without_an_entry_for_the_account(tmp_path,
+                                                                                  monkeypatch):
+    import pwd
+
+    import paths
+
+    def no_entry(uid):
+        raise KeyError(f"getpwuid(): uid not found: {uid}")
+
+    # an account that the password database does not know, as with an arbitrary
+    # uid in a container, where the environment is all that names the user
+    monkeypatch.setattr(pwd, "getpwuid", no_entry)
+    monkeypatch.setenv("LOGNAME", "name_in_the_environment")
+    use(tmp_path, f"output_dir: {tmp_path}/${{user}}/out\n")
+    assert paths.lookup("output_dir") == f"{tmp_path}/name_in_the_environment/out"
+
+
 def test_a_value_is_used_as_written_no_link_is_resolved(tmp_path):
     import paths
 
@@ -325,15 +374,21 @@ def test_a_user_name_that_cannot_be_found_in_the_default_file_points_to_a_local_
     assert "paths.local.yaml" in message and "without ${user}" in message
 
 
-# what `getpass.getuser()` raises without a user name depends on the Python version
+# what `getpass.getuser()` raises without a user name depends on the Python version.
+# The account has no entry in the password database (`no_user_name`), so the name
+# is asked from `getpass.getuser()`, and the error is the one it raises.
 @pytest.mark.parametrize("error", [KeyError("getpwuid(): uid not found: 1234"),
                                    ImportError("No module named 'pwd'"),
                                    OSError("No username set in the environment")],
                          ids=["KeyError", "ImportError", "OSError"])
-def test_a_user_name_error_of_any_python_version_is_a_paths_error(tmp_path, monkeypatch, error):
+def test_a_user_name_error_of_any_python_version_is_a_paths_error(tmp_path, monkeypatch,
+                                                                  no_user_name, error):
     import paths
 
+    asked = []
+
     def no_user():
+        asked.append("getpass.getuser")
         raise error
 
     monkeypatch.setattr(getpass, "getuser", no_user)
@@ -341,6 +396,7 @@ def test_a_user_name_error_of_any_python_version_is_a_paths_error(tmp_path, monk
     message = message_of(paths.lookup, "output_dir")
     assert "output_dir" in message and file.name in message
     assert "without ${user}" in message
+    assert asked == ["getpass.getuser"]
 
 
 def test_command_without_a_key_goes_on_when_the_user_name_cannot_be_found(tmp_path, capsys,

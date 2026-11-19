@@ -16,10 +16,13 @@ Nothing is read when this module is imported, and a location is checked only
 when it is asked for, so a missing one stops only the code that needs it. The
 file is chosen and parsed on the first call and kept in memory.
 
-A value is an absolute path. Two variables exist: `${user}`, the system user
-name, and `${output_dir}`, the value of the key `output_dir`. Any other `$` is
-an error: no environment variable is read. A value is used as written after
-substitution: no link is resolved and `~` is not expanded.
+A value is an absolute path. Two variables exist: `${user}`, the name of the
+account the process runs as, and `${output_dir}`, the value of the key
+`output_dir`. `${user}` is the entry of the process in the password database,
+which is what SLURM writes for `%u`: LOGNAME and USER do not change it, and
+are read only for an account that has no such entry. Any other `$` is an
+error: a value cannot name an environment variable. A value is used as
+written after substitution: no link is resolved and `~` is not expanded.
 
 From the command line, inside `segment-any-sign/`:
 
@@ -200,8 +203,8 @@ def _resolve(key: str, written: dict[str, object], file: Path) -> str:
         raise PathsError(f"{key} is {value!r} in {file.name}, which is not a path.")
     if "$" in _VARIABLE.sub("", value):
         raise PathsError(f"{key} is {value} in {file.name}, but a `$` in it is not part of "
-                         f"${{user}} or ${{output_dir}}, the two variables. No environment "
-                         f"variable is read: for the user name, write ${{user}}.")
+                         f"${{user}} or ${{output_dir}}, the two variables. A value cannot "
+                         f"name an environment variable: for the user name, write ${{user}}.")
 
     def variable(match: re.Match) -> str:
         name = match.group(1)
@@ -227,13 +230,26 @@ def _resolve(key: str, written: dict[str, object], file: Path) -> str:
 
 
 def _user(key: str, value: str, file: Path) -> str:
-    """The system user name, for `${user}` in the value of `key`."""
+    """The name of the account the process runs as, for `${user}` in the value of `key`.
+
+    It is the entry of the user id of the process in the password database,
+    which is what SLURM writes for `%u`, so LOGNAME and USER do not change it.
+    Only an account without such an entry gets the name `getpass.getuser()`
+    gives: the first of LOGNAME, USER, LNAME and USERNAME that is set.
+    """
+    try:
+        # imported here: the password database is not a module of every system
+        import pwd
+
+        return pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError, OSError):
+        pass                                          # no entry: ask as before
     try:
         return getpass.getuser()
     except (KeyError, ImportError, OSError) as error:
-        # nothing in the environment names the user and the password database has
-        # no entry for the account, as with an arbitrary uid in a container. Which
-        # of the three is raised depends on the Python version.
+        # nothing in the environment names the user either, as with an arbitrary
+        # uid in a container. Which of the three is raised depends on the Python
+        # version.
         where = (f"Copy {file.name} to {LOCAL_FILE.name} and write the folder there"
                  if file == DEFAULT_FILE else "Write the folder")
         raise PathsError(f"{key} is {value} in {file.name}, but the user name of this "

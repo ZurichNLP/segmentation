@@ -70,3 +70,9 @@ conda activate sas && cd segment-any-sign && pytest tests/
 This runs every test of the project, not only the tests of the metrics. The metric tests are [`tests/test_segmentation.py`](../tests/test_segmentation.py), 45 tests: each metric's definition and edge cases, the disagreements above, greedy-versus-optimal matching, micro-versus-macro aggregation, and inclusive-bound arithmetic. The other files of [`tests/`](../tests/) test the record of the code a run started from, the paths file, the locations the loaders read, where a training run writes, and that no absolute path is written in project code.
 
 The full run needs the `sas` environment, where no test is skipped. Outside it the tests need pytest, numpy, scikit-learn and pyyaml. A test that needs any other package is skipped when that package is not installed, and `pytest tests/ -rs` names the package. pyyaml is needed by every test, also by the metric tests when they are run alone with `pytest tests/test_segmentation.py`: [`tests/conftest.py`](../tests/conftest.py) gives each test a paths file of its own, and writes it with pyyaml.
+
+On the login node of the UZH cluster the memory of a process is limited (`ulimit -v`), and there `import torch` fails with `libtorch_cpu.so: failed to map segment from shared object`. So `pytest tests/` fails every test that imports torch, six tests in [`tests/test_locations.py`](../tests/test_locations.py) and [`tests/test_train_outputs.py`](../tests/test_train_outputs.py): the first with that message, the others with "`torch` can only be initialized once per process". It is not a fault of the code under test. With one thread for the numeric libraries torch loads and all tests pass:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 pytest tests/
+```
