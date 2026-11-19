@@ -9,11 +9,16 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
 #SBATCH --time=1-12:00:00
-#SBATCH --output=/scratch/zifjia/segment-any-sign/slurm/%x-%j.out
-#SBATCH --error=/scratch/zifjia/segment-any-sign/slurm/%x-%j.out
+#SBATCH --output=/scratch/%u/segment-any-sign/slurm/%x-%j.out
+#SBATCH --error=/scratch/%u/segment-any-sign/slurm/%x-%j.out
 #
 # Stage one: subtitle-supervised phrase pretraining on YouTube-SL-25.
 #
+# Submit from inside segment-any-sign/, with the sas environment active: the
+# job runs in the checkout it was submitted from, so a git worktree trains its
+# own branch, and with the python that is on PATH at submission.
+#
+#     python -m paths outputs.slurm                                 # once
 #     sbatch experiments/pretrain_youtube.slurm                     # 2,80,1
 #     sbatch --job-name=02_pretrain_youtube_b100 \
 #            experiments/pretrain_youtube.slurm 2,100,1 _b100
@@ -64,7 +69,12 @@
 #     1.4M times and reclaimed each time, never an OOM, but the extra helps.
 #
 # The --output directory must already exist: SLURM opens the log file before the
-# script runs, so the mkdir below only guards against a later wipe of scratch.
+# script runs, so no check below can report that it is missing. Create it once
+# with `python -m paths outputs.slurm`. SLURM cannot read the paths file, so the
+# folder is written above with %u, SLURM's pattern for the user name: it is
+# `outputs.slurm` as long as output_dir is /scratch/<user>/segment-any-sign in
+# the paths file. Keep the two the same: train.py prints a warning into the log
+# when the log is not in `outputs.slurm`.
 
 set -euo pipefail
 
@@ -78,19 +88,36 @@ BODY_PART_DROPOUT="${8:-0.1}"
 ATTN_DROPOUT="${9:-0.1}"
 NOTE="${4:-weights ${WEIGHTS}, schedule ${SCHEDULE}, fps aug ${FPS_AUG}, tempo ${TEMPO}, frame dropout ${FRAME_DROPOUT}, body-part dropout ${BODY_PART_DROPOUT}, attention dropout ${ATTN_DROPOUT}, 40k steps}"   # README `change` column
 
-# the checkout the job was submitted from, so a git worktree trains its own
-# branch; the main checkout when submitted from anywhere else
-REPO="${SLURM_SUBMIT_DIR:-/home/zifjia/segmentation/segment-any-sign}"
-[ -f "$REPO/experiments/train.py" ] || REPO=/home/zifjia/segmentation/segment-any-sign
-PYTHON=/home/zifjia/data/conda/envs/sas/bin/python   # no `conda` on the nodes
+die() { echo "pretrain_youtube.slurm: $*" >&2; exit 1; }
 
-mkdir -p /scratch/zifjia/segment-any-sign/slurm
+# the checkout the job was submitted from, so a git worktree trains its own branch
+REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+[ -f "$REPO/experiments/train.py" ] \
+    || die "submit from inside segment-any-sign/: no experiments/train.py in ${REPO}"
 cd "$REPO"
+
+# sbatch passes the environment of the submission to the job, so this is the
+# python of the environment that was active then. `conda activate` cannot be
+# run here: there is no `conda` on the nodes.
+PYTHON="$(command -v python)" \
+    || die "no python on PATH: activate the sas environment before sbatch"
+"$PYTHON" -c "import sign_language_segmentation, yaml" \
+    || die "${PYTHON} is not the python of the sas environment: activate it before sbatch"
+
+# every location this job reads or writes, checked as the code will check it
+# and printed; the output folders are created when missing, which also guards
+# against a wipe of scratch since the last job
+"$PYTHON" -m paths outputs.slurm outputs.dist outputs.cache outputs.wandb \
+    data.youtube_sl25.root data.public_dgs_corpus.downloads \
+    || die "a location this job needs cannot be used, see the message above"
+command -v nvidia-smi > /dev/null || die "no nvidia-smi: this is not a GPU node"
+
 echo "repo       ${REPO}  ($(git rev-parse --abbrev-ref HEAD))"
 
 echo "weights    ${WEIGHTS}   schedule ${SCHEDULE}   fps aug ${FPS_AUG}   tempo ${TEMPO}   run 02_pretrain_youtube${SUFFIX}"
 echo "dropout    frame ${FRAME_DROPOUT}   body part ${BODY_PART_DROPOUT}   attention ${ATTN_DROPOUT}"
 echo "node       $(hostname)"
+echo "python     ${PYTHON}"
 echo "job        ${SLURM_JOB_ID:-none}  cpus ${SLURM_CPUS_PER_TASK:-?}"
 echo "commit     $("$PYTHON" -m experiments.provenance)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader

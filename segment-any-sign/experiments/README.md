@@ -26,6 +26,28 @@ The [benchmarking rules](../benchmark/README.md#rules) apply unchanged: one eval
 
 Each run reports **dev** numbers here — test is for the final benchmark table only.
 
+## Where a run writes
+
+Nothing a run writes is in the repository. Each folder is a key of the paths file (see Locations in [`../README.md`](../README.md)), and `python -m paths` shows them.
+
+| What | Key | Notes |
+|---|---|---|
+| Run folders: checkpoints, `run_config.json`, the data report, figures | `outputs.dist` | A run folder is `dist/<run>` relative to `segment-any-sign/`, in `train.py` and in upstream's training code. `train.py` therefore makes `dist` a link to this folder when it starts, and must be run from inside `segment-any-sign/`. If `dist` exists and leads somewhere else, it stops and says what to move. `add_result_row.py`, `eval_youtube.py` and `plot_segmentation.py` read `<outputs.dist>/<run>` |
+| Run files of Weights & Biases | `outputs.wandb` | W&B makes its own `wandb` folder inside the folder it is given, so the files are in `<outputs.wandb>/wandb/`. `--wandb_dir` on the command line is kept. With `--no_wandb` the key is not needed |
+| Caches: YouTube-SL-25 pose headers, cues and alignment measures, and class weights | `outputs.cache` | Rebuilt from the data when missing |
+| SLURM logs | `outputs.slurm` | SLURM cannot read the paths file: it takes the folder from the `#SBATCH --output` line of [`pretrain_youtube.slurm`](pretrain_youtube.slurm), written with SLURM's `%u` as `/scratch/<user>/segment-any-sign/slurm`. That is `outputs.slurm` as long as `output_dir` is `/scratch/<user>/segment-any-sign`; keep the two the same. `train.py` links the log into the run folder as `slurm.out`, and prints a warning into the log when it is not in `outputs.slurm` |
+
+`run_config.json` records, under `paths`, the paths file the run read and the folder of every key in it. So `train.py` reads the whole file when it starts, before any work: a value that is not a location stops the run there, with an error that names the key, also in a key the run does not use. A dry run does the same. `--help` needs no location.
+
+To submit the pretraining job, from inside `segment-any-sign/` with the `sas` environment active:
+
+```bash
+python -m paths outputs.slurm               # once: SLURM opens the log before the script runs
+sbatch experiments/pretrain_youtube.slurm   # its header documents the arguments
+```
+
+The job runs in the checkout it was submitted from, with the `python` that was on `PATH` at submission. Before training it checks that python, and every location it needs with `python -m paths`, and stops with a message when one cannot be used.
+
 ## What differs 2023 vs 2026, apart from the architecture
 
 Read off both codebases (`v2023 src/` and `main sign_language_segmentation/`). This is the candidate list to ablate.
@@ -125,7 +147,7 @@ Stage one of the staged design borrowed from [Segment Any Text](../literature/se
 
 ### The data
 
-`/shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_VGG` — 2.8 TB.
+The folder `data.youtube_sl25.root` of the paths file ([`../paths.uzh.yaml`](../paths.uzh.yaml) names the copy at UZH) — 2.8 TB. The loader keeps pose headers, cues and alignment measures in the folder `outputs.cache`; they are keyed by video id and do not record which corpus folder they came from, so delete them when `data.youtube_sl25.root` changes.
 
 | | |
 |---|---|

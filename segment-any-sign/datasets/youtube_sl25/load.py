@@ -8,8 +8,13 @@ Deliberately unfiltered. The raw distribution is the point: 56% of cue
 transitions are back-to-back and a third of videos are >95% covered, so O frames
 are scarce — the mid- and post-training stages on DGS are what shift the domain.
 
-Pose headers are cached under `/scratch`, since scanning 38,850 files costs about
-an hour and a run cannot pay that each time.
+Pose headers are cached, since scanning 38,850 files costs about an hour and a
+run cannot pay that each time.
+
+The corpus folder is the key `data.youtube_sl25.root` of the paths file
+(`../../paths.py`), and the caches are in the folder `outputs.cache`. The caches
+are keyed by video id and do not know which corpus folder they were built from:
+delete them when that key changes.
 
     from datasets.youtube_sl25 import load as yt
     for spec in yt.clip_specs("train"):
@@ -23,24 +28,36 @@ import os
 import re
 from pathlib import Path
 
-ROOT = "/shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_VGG"
-POSES = f"{ROOT}/mediapipe"
-SUBTITLES = f"{ROOT}/subtitles"
+import paths
 
-# headers are read once and cached here; /scratch, never /home
-CACHE_DIR = Path("/scratch/zifjia/segment-any-sign/cache")
-META_CACHE = CACHE_DIR / "youtube_sl25_pose_meta.json"
-CUE_CACHE = CACHE_DIR / "youtube_sl25_cues.json"
+# inside the corpus folder
+POSE_FOLDER = "mediapipe"
+SUBTITLE_FOLDER = "subtitles"
+METADATA_NAME = "youtube-sl-25_youtube-sl-25-metadata.csv"
+
+# inside the cache folder: headers, cues and alignment measures are read once
+META_CACHE_NAME = "youtube_sl25_pose_meta.json"
+CUE_CACHE_NAME = "youtube_sl25_cues.json"
+QUALITY_CACHE_NAME = "youtube_sl25_dev_quality.json"
 
 #: videos held out for in-domain validation, per sign language. All 56 languages
 #: in the corpus have at least 12 videos, so 3 each gives a balanced 168-video
 #: dev set — enough to cover every language, small enough that validating on
 #: whole videos (median 3.8 min) stays affordable.
 DEV_PER_LANGUAGE = 3
-METADATA = f"{ROOT}/youtube-sl-25_youtube-sl-25-metadata.csv"
 
 _TIMESTAMP = re.compile(
     r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[.,](\d{3})")
+
+
+def _root() -> str:
+    """The corpus folder, `data.youtube_sl25.root` in the paths file."""
+    return str(paths.data("youtube_sl25.root"))
+
+
+def _cache_file(name: str) -> Path:
+    """A file of the cache folder, `outputs.cache`, which is created when missing."""
+    return paths.output("cache") / name
 
 
 def _seconds(hours: str, minutes: str, secs: str, millis: str) -> float:
@@ -77,12 +94,14 @@ def parse_vtt(path: str) -> list[dict]:
 
 def video_index() -> dict[str, dict]:
     """Map video id -> {pose, subtitle}, keeping only ids that have both."""
-    poses = {p[:-len(".pose")]: os.path.join(POSES, p)
-             for p in os.listdir(POSES) if p.endswith(".pose")}
+    root = _root()
+    pose_folder, subtitle_folder = f"{root}/{POSE_FOLDER}", f"{root}/{SUBTITLE_FOLDER}"
+    poses = {p[:-len(".pose")]: os.path.join(pose_folder, p)
+             for p in os.listdir(pose_folder) if p.endswith(".pose")}
     subtitles = {}
-    for name in os.listdir(SUBTITLES):
+    for name in os.listdir(subtitle_folder):
         if name.endswith(".vtt"):
-            subtitles.setdefault(name.split(".")[0], os.path.join(SUBTITLES, name))
+            subtitles.setdefault(name.split(".")[0], os.path.join(subtitle_folder, name))
     return {vid: {"pose": poses[vid], "subtitle": subtitles[vid]}
             for vid in sorted(poses.keys() & subtitles.keys())}
 
@@ -90,10 +109,11 @@ def video_index() -> dict[str, dict]:
 def _pose_meta(index: dict, rebuild: bool = False) -> dict:
     """fps and frame count per video, cached. Unreadable files are recorded as
     `null` so a corrupt pose is skipped without being re-opened every run."""
+    meta_cache = _cache_file(META_CACHE_NAME)
     cache = {}
-    if META_CACHE.exists() and not rebuild:
+    if meta_cache.exists() and not rebuild:
         try:
-            cache = json.loads(META_CACHE.read_text())
+            cache = json.loads(meta_cache.read_text())
         except ValueError:
             cache = {}
 
@@ -123,10 +143,10 @@ def _pose_meta(index: dict, rebuild: bool = False) -> dict:
                     print(f"  unreadable {result[0]}: {result[2]}")
                 if done % 5000 == 0:
                     print(f"  {done:,}/{len(missing):,}", flush=True)
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        META_CACHE.write_text(json.dumps(cache))
+        meta_cache.parent.mkdir(parents=True, exist_ok=True)   # a wipe since the start
+        meta_cache.write_text(json.dumps(cache))
         broken = sum(1 for v in cache.values() if v is None)
-        print(f"cached {len(cache):,} headers to {META_CACHE}"
+        print(f"cached {len(cache):,} headers to {meta_cache}"
               f"{f', {broken} unreadable' if broken else ''}")
     return cache
 
@@ -138,10 +158,11 @@ def _cues(index: dict, rebuild: bool = False) -> dict:
     that at every startup. Stored as ms ints rather than float seconds — a third
     the size, and exact.
     """
+    cue_cache = _cache_file(CUE_CACHE_NAME)
     cache = {}
-    if CUE_CACHE.exists() and not rebuild:
+    if cue_cache.exists() and not rebuild:
         try:
-            cache = json.loads(CUE_CACHE.read_text())
+            cache = json.loads(cue_cache.read_text())
         except ValueError:
             cache = {}
 
@@ -159,9 +180,9 @@ def _cues(index: dict, rebuild: bool = False) -> dict:
                 cache[vid] = cues
                 if done % 10000 == 0:
                     print(f"  {done:,}/{len(missing):,}", flush=True)
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        CUE_CACHE.write_text(json.dumps(cache, separators=(",", ":")))
-        print(f"cached {sum(len(v) for v in cache.values()):,} cues to {CUE_CACHE}")
+        cue_cache.parent.mkdir(parents=True, exist_ok=True)
+        cue_cache.write_text(json.dumps(cache, separators=(",", ":")))
+        print(f"cached {sum(len(v) for v in cache.values()):,} cues to {cue_cache}")
     return cache
 
 
@@ -175,7 +196,7 @@ def languages() -> dict[str, str]:
     import csv
 
     mapping = {}
-    with open(METADATA, newline="") as handle:
+    with open(f"{_root()}/{METADATA_NAME}", newline="") as handle:
         for row in csv.reader(handle):
             if len(row) >= 2:
                 mapping[row[0].strip()] = row[1].strip()
@@ -227,7 +248,7 @@ def clip_specs(split: str = "train", per_language: int = DEV_PER_LANGUAGE,
     # is still worth learning from at this scale.
     keep = dev_keep(per_language) if (split == "dev" and dev_filter) else None
 
-    for vid, paths in index.items():
+    for vid, files in index.items():
         info = meta.get(vid)
         if info is None:                          # unreadable pose
             continue
@@ -239,7 +260,7 @@ def clip_specs(split: str = "train", per_language: int = DEV_PER_LANGUAGE,
                 for a, b in all_cues.get(vid, [])]
         if not cues:
             continue
-        yield {"id": vid, "pose_path": paths["pose"], "fps": info["fps"],
+        yield {"id": vid, "pose_path": files["pose"], "fps": info["fps"],
                "total_frames": info["total_frames"], "sentences": cues}
 
 
@@ -249,8 +270,6 @@ def clip_specs(split: str = "train", per_language: int = DEV_PER_LANGUAGE,
 # audio, or the signing, or neither, and nothing in the corpus says which. Three
 # cheap measures per video separate the ones worth scoring against, all computed
 # from pose motion and the cue timings alone — no model, no manual labels.
-
-QUALITY_CACHE = CACHE_DIR / "youtube_sl25_dev_quality.json"
 
 #: Keep a dev video only if all three hold. `gap > 0` says the timings relate to
 #: the signing at all; `|lag| < 2 s` allows the interpreting offset but excludes
@@ -324,10 +343,11 @@ def measure_quality(ids, rebuild: bool = False, workers: int = 1) -> dict:
     import numpy as np
     from pose_format import Pose
 
+    quality_cache = _cache_file(QUALITY_CACHE_NAME)
     cache = {}
-    if QUALITY_CACHE.exists() and not rebuild:
+    if quality_cache.exists() and not rebuild:
         try:
-            cache = json.loads(QUALITY_CACHE.read_text())
+            cache = json.loads(quality_cache.read_text())
         except ValueError:
             cache = {}
 
@@ -379,11 +399,11 @@ def measure_quality(ids, rebuild: bool = False, workers: int = 1) -> dict:
                 cache[vid] = value
                 if done % 500 == 0:
                     print(f"  {done:,}/{len(wanted):,}", flush=True)
-                    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                    QUALITY_CACHE.write_text(json.dumps(cache))
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        QUALITY_CACHE.write_text(json.dumps(cache))
-        print(f"cached {len(cache):,} measures to {QUALITY_CACHE}")
+                    quality_cache.parent.mkdir(parents=True, exist_ok=True)
+                    quality_cache.write_text(json.dumps(cache))
+        quality_cache.parent.mkdir(parents=True, exist_ok=True)
+        quality_cache.write_text(json.dumps(cache))
+        print(f"cached {len(cache):,} measures to {quality_cache}")
     return cache
 
 

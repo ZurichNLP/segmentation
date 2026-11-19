@@ -24,7 +24,13 @@ experiments/**/logs/
 wandb/
 lightning_logs/
 
-# Run artefacts. Both are symlinks to /scratch/zifjia/segment-any-sign/ —
-# checkpoints and wandb logs must not sit on /home, which is small.
+# Locations of one machine or one user; see paths.example.yaml. When this file
+# exists it replaces paths.uzh.yaml, so committing it would change every checkout.
+paths.local.yaml
+
+# Run artefacts. `dist` is a link that experiments/train.py makes to the folder
+# `outputs.dist` of the paths file: checkpoints must not sit on /home, which is
+# small. train.py sends the files of Weights & Biases to `outputs.wandb`; a
+# `wandb` folder appears here only when --wandb_dir names this folder.
 dist
 wandb

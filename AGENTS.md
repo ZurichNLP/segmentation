@@ -36,7 +36,14 @@ and form your own view.
 Environment setup is in the Setup section of `segment-any-sign/README.md`. Project scripts are
 run from inside `segment-any-sign/`.
 
-- Metric tests: `cd segment-any-sign && pytest tests/`
+- Project tests (metrics, the paths file, where a run writes):
+  `cd segment-any-sign && pytest tests/`
+  The full run needs the `sas` environment, where no test is skipped. Elsewhere, a test
+  that needs a package which is not installed is skipped, and `pytest tests/ -rs` names the
+  package: a run with skipped tests is not the full run.
+- Locations: `python -m paths` shows the paths file in use and each location;
+  `python -m paths <key> ...` checks keys as the code does. See Locations in
+  `segment-any-sign/README.md`.
 - Upstream package tests: `pytest` from the repository root. They need the dependencies that
   `.github/workflows/test.yaml` installs.
 - Lint: `ruff check <the files you changed>`, compared with the same command on the base
@@ -92,10 +99,20 @@ These protect the comparability of every number in the repository.
   committed under `segment-any-sign/experiments/predictions/`, in the same commit as the
   run's row in `experiments/README.md`. Test predictions under `benchmark/predictions/` are
   ignored and stay uncommitted.
-- Keep each data location as a named constant at the top of the module that owns it, with a
-  command-line option where a script needs to override it. Do not add credentials, and do
-  not hard-code a directory that belongs to one user. Where existing code does, do not copy
-  the pattern; changing it is a task of its own.
+- Every location outside the repository (data, caches, checkpoints, logs) is a key in the
+  paths file. `segment-any-sign/paths.py` is the only module that reads that file:
+  `paths.uzh.yaml`, or `paths.local.yaml` when it exists. Other code asks it for a location
+  inside the function that uses it, never at import, as a default argument or as a
+  command-line default, so that a missing location stops only the code that needs it. Write
+  no absolute path in project code: `tests/test_no_absolute_paths.py` fails if one appears.
+  The exceptions are the paths files, the `#SBATCH` lines of a SLURM script, which may name
+  a folder only through SLURM's `%u`, and the `datasets/*/explore.py` notebooks, which keep
+  their locations in their configuration cell. The scan also leaves out `/dev/null` on a
+  command line of a shell script, and its own file, which holds the snippets it is tested
+  on. A new location gets a key in `paths.example.yaml`, with a comment that says what the
+  folder must contain, and in `paths.uzh.yaml`. Do not add a command-line option whose only
+  purpose is to set a location. Do not commit `paths.local.yaml`, and do not add
+  credentials.
 - Do not edit generated files by hand (for example `datasets/*/explore.md` and its
   `explore_files/`); edit the script that produces them, regenerate, and commit the result.
 - Follow the style of the surrounding code, and add no new lint errors in the files you

@@ -81,9 +81,13 @@ from pose_format.numpy.representation.distance import DistanceRepresentation
 from pose_format.utils.generic import normalize_hands_3d, pose_hide_legs, pose_normalization_info
 from pose_format.utils.optical_flow import OpticalFlowCalculator
 
-DATA_DIR = Path("/shares/sign-language.ebling.cl.uzh/Signsuisse")
-DEFAULT_POSES = DATA_DIR / "example_mediapipe"
-DEFAULT_VIDEOS = DATA_DIR / "example_videos"
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import paths
+
+# inside the Signsuisse folder, the key `data.signsuisse.root` of the paths file
+POSE_FOLDER = "example_mediapipe"
+VIDEO_FOLDER = "example_videos"
 
 # The DSGS test set: two translation-direction files whose id sets are disjoint,
 # 250 + 250 = 500 example sentences. example_mediapipe holds 18k poses for the
@@ -238,8 +242,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--poses", type=Path, default=DEFAULT_POSES, help="directory of .pose files")
-    parser.add_argument("--videos", type=Path, default=DEFAULT_VIDEOS, help="directory of .mp4 files to link")
+    parser.add_argument("--poses", type=Path, default=None,
+                        help="directory of .pose files (default: example_mediapipe in "
+                             "data.signsuisse.root of the paths file)")
+    parser.add_argument("--videos", type=Path, default=None,
+                        help="directory of .mp4 files to link (default: example_videos in "
+                             "the same folder)")
     parser.add_argument("--out", type=Path, default=None,
                         help="output dir (default: <data>/elan_2023_segmentation_<tag>_<b>_<o>)")
     parser.add_argument("--model", default="model_E4s-1.pth",
@@ -258,6 +266,11 @@ def main() -> None:
                         help="process every .pose in --poses instead of only the 500 DSGS test examples")
     args = parser.parse_args()
 
+    if args.poses is None:
+        args.poses = paths.data("signsuisse.root") / POSE_FOLDER
+    if args.videos is None:
+        args.videos = paths.data("signsuisse.root") / VIDEO_FOLDER
+
     # e.g. model_E4s-1.pth -> e4s
     tag = args.model.replace("model_", "").replace(".pth", "").split("-")[0].lower() or "default"
     out_dir = args.out or args.poses.parent / f"example_segmentation_v2023_{tag}_{int(args.b)}_{int(args.o)}"
@@ -267,7 +280,7 @@ def main() -> None:
         examples = {}
         pose_paths = sorted(args.poses.glob("*.pose"))
     else:
-        examples = load_test_examples(DATA_DIR)
+        examples = load_test_examples(paths.data("signsuisse.root"))
         pose_paths = [args.poses / f"{example_id}.pose" for example_id in sorted(examples)]
         missing = [p.name for p in pose_paths if not p.exists()]
         if missing:

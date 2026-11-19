@@ -5,7 +5,8 @@ models drift apart on things that have nothing to do with modelling — a differ
 joke filter, a different split file, a different person-level flattening — and the
 table stops comparing what it claims to compare.
 
-The source is the TFDS build at `TFDS_ROOT`, read through the *original v2023*
+The source is the TFDS build in the folder `data.public_dgs_corpus.tfds` of the
+paths file (`../../paths.py`), read through the *original v2023*
 `tfds_dataset.py`, because that is what produced the reproduction we verified. It
 is vendored out of git into `.cache/v2023_src/` and patched only for imports; see
 `../../benchmark/predict_dgs_2023.py` for why the original code is driven
@@ -24,6 +25,12 @@ using its own protocol — v2023 floors both bounds, the 2026 code walks frame
 timestamps — and those conversions differ by up to a frame. Forcing one of them on
 the other model would break the reproduction it is meant to be checked against, so
 the conversion is left to the caller and documented in `../../benchmark/README.md`.
+
+Both folders come from the paths file: `data.public_dgs_corpus.tfds`, and
+`data.public_dgs_corpus.downloads` for the download archive. The TFDS records
+point at a share that can no longer be read, so ELAN and CMDI files are
+re-resolved by file name into the archive. A function that takes `backup` or
+`tfds_root` reads the paths file when the argument is None, and only then.
 """
 
 from __future__ import annotations
@@ -34,10 +41,7 @@ import sys
 import types
 from pathlib import Path
 
-TFDS_ROOT = "/shares/iict-sp2.ebling.cl.uzh/common/tensorflow_datasets"
-# The TFDS records point at /shares/volk.cl.uzh/... which we can no longer read,
-# so ELAN and CMDI files are re-resolved by basename into this backup.
-BACKUP = "/shares/iict-sp2.ebling.cl.uzh/zifjia/backups/tensorflow_datasets_2/downloads"
+import paths
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CACHE = REPO_ROOT / ".cache"
@@ -109,18 +113,24 @@ def stub_mediapipe() -> None:
     sys.modules.setdefault("mediapipe.solutions.holistic", holistic)
 
 
-def local(path: str, backup: str = BACKUP) -> str:
-    """Re-resolve an absolute /shares/volk.cl.uzh path into our backup."""
+def _downloads(backup: str | None) -> str:
+    """The download archive: the folder given, or the one of the paths file."""
+    return str(paths.data("public_dgs_corpus.downloads")) if backup is None else backup
+
+
+def local(path: str, backup: str) -> str:
+    """Re-resolve a path stored in a TFDS record into the download archive, by file name."""
     return os.path.join(backup, os.path.basename(path))
 
 
-def vendored(backup: str = BACKUP):
+def vendored(backup: str | None = None):
     """Import the v2023 `data` module, with annotation lookups redirected.
 
     Returns the module itself so a caller can use the whole original pipeline.
-    `get_elan_sentences` and `filter_dataset` are wrapped to read our backup;
-    nothing else is touched.
+    `get_elan_sentences` and `filter_dataset` are wrapped to read the download
+    archive; nothing else is touched.
     """
+    backup = _downloads(backup)
     vendor_v2023()
     stub_mediapipe()
     if str(SRC) not in sys.path:
@@ -153,7 +163,7 @@ def vendored(backup: str = BACKUP):
 
 
 def iter_clips(split: str = "test", fps: int = AVAILABLE_FPS,
-               tfds_root: str = TFDS_ROOT, backup: str = BACKUP):
+               tfds_root: str | None = None, backup: str | None = None):
     """Yield one dict per signer-video, with the pose unprocessed.
 
     Keys: `id` (`<document>_<person>`), `pose` (a `pose_format.Pose` holding only
@@ -167,6 +177,8 @@ def iter_clips(split: str = "test", fps: int = AVAILABLE_FPS,
     Sentences with no glosses are dropped, matching both models' loaders.
     """
     v2023 = vendored(backup)
+    if tfds_root is None:
+        tfds_root = str(paths.data("public_dgs_corpus.tfds"))
 
     import tfds_dataset
 
@@ -246,7 +258,7 @@ def document_id(name: str) -> str:
     return name.split("-")[0]
 
 
-def _archive_index(backup: str = BACKUP) -> dict:
+def _archive_index(backup: str | None = None) -> dict:
     """Map file kind -> session key -> local path, read from the .INFO sidecars.
 
     Keys are the **session** stem (`1209309-13425110-13472919`), not the document
@@ -257,6 +269,7 @@ def _archive_index(backup: str = BACKUP) -> dict:
     import glob
     import json
 
+    backup = _downloads(backup)
     index = {"pose": {}, "eaf": {}, "cmdi": {}}
     for info_path in glob.glob(os.path.join(backup, "*.INFO")):
         try:
@@ -316,7 +329,7 @@ def _pose_meta(pose_path: str, cache: dict) -> tuple[float, int]:
     return fps, total
 
 
-def clip_specs_native(split: str = "test", backup: str = BACKUP,
+def clip_specs_native(split: str = "test", backup: str | None = None,
                       splits_path: str | None = None):
     """Yield clip *metadata* from the archive, without decoding any pose body.
 
@@ -399,7 +412,7 @@ def clip_specs_native(split: str = "test", backup: str = BACKUP,
         cache_path.write_text(json.dumps(cache))
 
 
-def iter_clips_native(split: str = "test", backup: str = BACKUP,
+def iter_clips_native(split: str = "test", backup: str | None = None,
                       splits_path: str | None = None):
     """Yield clips from the archived .pose downloads, at their native 50fps.
 

@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
+import paths
 import torch  # noqa: E402
 
 from sign_language_segmentation.datasets.common import (  # noqa: E402
@@ -109,7 +110,8 @@ class YouTube25Dataset(BaseSegmentationDataset):
         return datum
 
     def get_split_manifest(self) -> dict:
-        return {"dataset": self.dataset_name, "source": yt.ROOT,
+        return {"dataset": self.dataset_name,
+                "source": paths.lookup("data.youtube_sl25.root"),
                 "level": "phrase only (sign head masked)",
                 "dev_filter": self.dev_filter,
                 "splits": {s.value: sorted(ids)

@@ -45,6 +45,14 @@ self-evidently throwaway; a dry run also deletes its own run directory.
                                   the mean of sign and phrase mF1S; upstream used
                                   hm_iou.
 
+`dist` is a link, made here, to the folder `outputs.dist` of the paths file
+(`../paths.py`): a run folder is `dist/<run>` relative to `segment-any-sign/`,
+here and in upstream's training code, so this script must be run from inside
+`segment-any-sign/`. See `link_dist`. The run files of W&B go to the folder
+`outputs.wandb`, unless `--wandb_dir` names another; see `set_wandb_dir`.
+The whole paths file is read when the run starts: a value that is not a
+location stops it there, also in a key this run does not use.
+
 Every run first writes a data report — split sizes, segment counts, label balance
 and correctness checks — to `dist/<run>/data_stats.{json,log}`, and attaches its
 scalar summary to the W&B run. A run that leaks documents between splits aborts
@@ -52,8 +60,8 @@ before training rather than producing a number nobody can trust.
 
 It also writes `dist/<run>/run_config.json`: every hyperparameter, the command
 line, the git commit and branch and whether the tree had uncommitted changes,
-and the python/torch/GPU it ran on — enough to reproduce the run from the
-checkpoint alone.
+the paths file and the folder of every key in it, and the python/torch/GPU it
+ran on — enough to reproduce the run from the checkpoint alone.
 
 The full metric set from `../metrics/` is logged on **both** train and validation
 under matching names, so W&B can overlay the two curves — see
@@ -88,14 +96,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-#: Everything a run writes lives on scratch, never in the repo or on /home:
-#: checkpoints are ~68 MB each and the pose caches are large. `dist/` and
-#: `wandb/` in the repo are symlinks to the same root, so relative paths still
-#: work; this is the one path that has to name it outright.
-SCRATCH = Path("/scratch/zifjia/segment-any-sign")
-CACHE_DIR = SCRATCH / "cache"
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import paths
 
 
 def main() -> None:
@@ -230,8 +233,16 @@ def main() -> None:
     from experiments import dgs_dataset  # noqa: F401
     from experiments import youtube_dataset  # noqa: F401
 
-    from datasets.public_dgs_corpus import load as dgs_data
     from sign_language_segmentation.args import args
+
+    # After the arguments, so that --help needs no location, and before any
+    # work: every value of the paths file must be a location, also in a key
+    # this run does not use, because run_config.json records them all, and
+    # `write_run_config` runs only after the class weights and the data report.
+    paths.describe()
+
+    # before anything that writes below dist/
+    link_dist()
 
     # Upstream's args.py prints the parsed Namespace at import — before any of
     # this — so that first line still shows `datasets='all'` and the two
@@ -243,7 +254,8 @@ def main() -> None:
     if args.datasets == "all":
         # "all" would resolve to whatever happens to be registered; be explicit
         args.datasets = dgs_dataset.DGSCorpusDataset.dataset_name
-    args.corpus = args.poses = dgs_data.BACKUP
+    # recorded, not read here: None in a run whose paths file has no DGS archive
+    args.corpus = args.poses = paths.lookup("data.public_dgs_corpus.downloads")
     args.data_loader = "datasets/public_dgs_corpus/load.py (archive, native fps)"
 
     import sign_language_segmentation.train as upstream_train
@@ -263,6 +275,7 @@ def main() -> None:
     # "segmentation", so our runs do not land in someone else's project.
     if args.wandb_project == "segmentation":
         args.wandb_project = "segment-any-sign"
+    set_wandb_dir(args, rest)
 
     # Upstream's train() instantiates whatever `PoseTaggingModel` names in its own
     # module namespace, so swapping the symbol there is enough to get the extra
@@ -734,8 +747,9 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
     balance the formula was written against. The weights carried over are then
     deterministic and use 2023's rule unchanged.
 
-    Cached on scratch, keyed by dataset, level set, phrase definition and the
-    clip list itself, so a changed split can never silently reuse old weights.
+    Cached in the folder `outputs.cache` of the paths file, keyed by dataset,
+    level set, phrase definition and the clip list itself, so a changed split
+    can never silently reuse old weights.
 
     Two schemes. `inverse` is 2023's, `total / count` for every class. `inverse-b`
     keeps the corpus relationship between B and I — `count_I / count_B`, which is
@@ -784,7 +798,7 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
                       f"collapses the model onto O. Use --class-weights "
                       f"inverse-b, or --weights-from a corpus with more O.")
 
-    cache_dir = Path(cache_dir or CACHE_DIR)
+    cache_dir = Path(cache_dir) if cache_dir else paths.output("cache")
     cache_path = cache_dir / f"class_weights_{name}_{scheme}_{signature}.json"
     if cache_path.exists():
         weights = json.loads(cache_path.read_text())
@@ -843,12 +857,10 @@ def report_effective_config(args, mine, run_name: str) -> None:
     actively misleading about what is running. It cannot be suppressed from here,
     so this restates the truth after the fact.
     """
-    from datasets.public_dgs_corpus import load as dgs_data
-
     print("\neffective configuration  (supersedes the `Arguments:` line above,"
           "\n                          which upstream prints before any override)"
           f"\n  data        {args.datasets} via {args.data_loader}"
-          f"\n              {dgs_data.BACKUP}"
+          f"\n              {paths.lookup('data.public_dgs_corpus.downloads')}"
           f"\n  phrase gold {mine.phrase}"
           f"\n  run/wandb   {run_name}  ->  project {args.wandb_project}"
           f"\n  levels      {args.levels}"
@@ -891,6 +903,75 @@ def report_effective_config(args, mine, run_name: str) -> None:
              if args.limit else ""))
 
 
+def link_dist(project: Path | None = None) -> Path:
+    """Make `dist` in the working directory lead to the folder `outputs.dist`.
+
+    A run folder is `dist/<run>` relative to the working directory, here and in
+    upstream's training code, which cannot be given another folder. So `dist`
+    is a link to the configured folder, made here when it is missing. Returns
+    the configured folder.
+
+    Stops, changing nothing, when the working directory is not `project`
+    (`segment-any-sign/` unless given): from the repository root `dist` is the
+    tracked folder of the shipped model. Stops too when `dist` exists and leads
+    anywhere but the configured folder, because the runs in it would be split
+    over two places. A `dist` that already leads there is left as it is, whether
+    it is a link or, for `outputs.dist` set to `dist` itself, the folder.
+    """
+    project = paths.ROOT if project is None else project
+    here = Path.cwd()
+    if here.resolve() != project.resolve():
+        raise SystemExit(
+            f"run experiments/train.py from inside {project.name}/, not from {here}: "
+            f"a run folder is dist/<run> relative to the working directory.")
+
+    target = paths.output("dist")
+    link = Path("dist")
+
+    def leads_to_target() -> bool:
+        return link.exists() and link.resolve() == target.resolve()
+
+    if leads_to_target():
+        return target
+    if not os.path.lexists(link):
+        try:
+            os.symlink(target, link)
+            return target
+        except FileExistsError:
+            # another job made it at the same moment: look at what it made
+            if leads_to_target():
+                return target
+
+    what = (f"a link to {os.readlink(link)}" if link.is_symlink()
+            else "a folder" if link.is_dir() else "a file")
+    raise SystemExit(
+        f"{here / link} is {what}, but outputs.dist is {target} in "
+        f"{paths.file_in_use().name}. Move its contents there and remove it, or "
+        f"change the key.")
+
+
+def set_wandb_dir(args, argv: list[str]) -> None:
+    """Send the run files of W&B to the folder `outputs.wandb` of the paths file.
+
+    Upstream's default for `--wandb_dir` is the working directory. W&B makes
+    its own `wandb` folder inside the folder it is given, so the files end up in
+    `<outputs.wandb>/wandb/`. The folder is created here, because W&B falls back
+    to a temporary folder, without failing, when it cannot write to the one it
+    was given.
+
+    A `--wandb_dir` on the command line (`argv`) is kept, and under
+    `--no_wandb` no location is asked for and no folder is made.
+    """
+    if args.no_wandb:
+        return
+    for argument in argv:
+        option = argument.split("=", 1)[0]
+        # argparse takes any prefix that fits one option only: --wandb_d is enough
+        if len(option) > len("--wandb_") and "--wandb_dir".startswith(option):
+            return
+    args.wandb_dir = str(paths.output("wandb"))
+
+
 def link_slurm_log(run_dir: Path) -> None:
     """Symlink this job's SLURM log into the run directory.
 
@@ -901,6 +982,10 @@ def link_slurm_log(run_dir: Path) -> None:
 
     Best effort: no SLURM, no scontrol, or an unreadable answer all just mean no
     link. A missing convenience must never stop a run that is ready to train.
+
+    Also prints `slurm_log_warning` when the log is not in the folder
+    `outputs.slurm` of the paths file: SLURM takes its log folder from the
+    `#SBATCH --output` line of the job script, so the two can disagree.
     """
     import subprocess
 
@@ -921,6 +1006,37 @@ def link_slurm_log(run_dir: Path) -> None:
         link.unlink()
     link.symlink_to(path)
     print(f"linked {link} -> {path}")
+    warning = slurm_log_warning(path)
+    if warning:
+        print(warning)
+
+
+def slurm_log_warning(log_path: str | Path) -> str | None:
+    """One line of warning when the SLURM log is not inside `outputs.slurm`, else None.
+
+    SLURM opens the log before the job script runs and cannot read the paths
+    file, so its folder comes from the `#SBATCH --output` line. Changing
+    `output_dir` moves the cache, the runs and the W&B files, but not the log;
+    this is where that shows. Links are followed on both sides, so two names of
+    one folder do not warn.
+
+    Never raises and creates nothing: None too when `outputs.slurm` is not set
+    or the paths file cannot be used.
+    """
+    try:
+        configured = paths.lookup("outputs.slurm")
+        if configured is None:
+            return None
+        if Path(log_path).resolve().is_relative_to(Path(configured).resolve()):
+            return None
+        return (f"WARNING the SLURM log is {log_path}, which is not in outputs.slurm "
+                f"({configured} in {paths.file_in_use().name}). SLURM takes the log folder "
+                f"from the #SBATCH --output line of the job script, not from the paths "
+                f"file: change one of the two so that they agree.")
+    except (OSError, RuntimeError, ValueError):
+        # a paths file that cannot be used (PathsError is a RuntimeError), or a
+        # log path that cannot be followed: no warning, never a stop
+        return None
 
 
 def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
@@ -939,6 +1055,12 @@ def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
 
     A run_config.json without the "dirty" key was written before this was
     recorded, so the absence of the key does not mean a clean tree.
+
+    Under "paths": "file", the paths file that was read, and "locations", the
+    folder of every key in it, null for a key that is not set
+    (`paths.describe()`). It records where the code was told to read and write;
+    nothing is checked on disk. A run_config.json without "paths" was written
+    when the folders were constants in the code.
     """
     import platform
 
@@ -962,6 +1084,7 @@ def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
                  "select_on": mine.select_on, "limit": mine.limit},
         "args": {k: v for k, v in sorted(vars(args).items())},
         "code": provenance.git_state(Path(__file__).resolve().parent),
+        "paths": paths.describe(),
         "environment": {"python": platform.python_version(), "torch": torch_version,
                         "host": platform.node(), "gpu": device_name},
     }

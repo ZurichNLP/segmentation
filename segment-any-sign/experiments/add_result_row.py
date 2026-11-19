@@ -28,9 +28,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import paths
+
 HERE = Path(__file__).resolve().parent
 README = HERE / "README.md"
-DIST = Path("/scratch/zifjia/segment-any-sign/dist")
 
 #: the header cell that identifies the pretraining table, and nothing else
 TABLE_ANCHOR = "| Filtered YouTube dev |"
@@ -95,7 +96,7 @@ def main() -> None:
     from benchmark.score import score_file
     from experiments.plot_segmentation import newest_checkpoint
 
-    run_dir = DIST / args.run
+    run_dir = paths.output("dist") / args.run
     run_id = args.run.rsplit("-", 1)[0]
     checkpoint = newest_checkpoint(run_dir, "best")
     step = int(torch.load(checkpoint, map_location="cpu",

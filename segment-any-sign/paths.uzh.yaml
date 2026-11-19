@@ -1,0 +1,39 @@
+# Locations on the UZH cluster.
+#
+# This file is read when paths.local.yaml does not exist. The two files are
+# never merged: when paths.local.yaml exists it is the only file read, so it
+# must hold every key you use.
+#
+# To use other locations, copy this file (at UZH) or paths.example.yaml
+# (anywhere else) to paths.local.yaml and edit the copy. paths.local.yaml is
+# not committed. paths.example.yaml says what each folder must contain.
+#
+# Two variables exist: ${user}, the name of the account that runs the code
+# (what SLURM writes for %u, whatever $USER says), and ${output_dir}. Any
+# other `$` is an error: a value cannot name an environment variable.
+# Every location is an absolute path. A location is checked when code uses
+# it, not before. `python -m paths` shows the file in use and each location.
+
+output_dir: /scratch/${user}/segment-any-sign
+
+outputs:
+  cache: ${output_dir}/cache
+  dist: ${output_dir}/dist
+  # Weights & Biases makes its own `wandb` folder inside this one.
+  wandb: ${output_dir}/wandb
+  # SLURM takes its log folder from the #SBATCH --output line of
+  # experiments/pretrain_youtube.slurm, which cannot read this file. The two
+  # agree as long as output_dir is /scratch/${user}/segment-any-sign.
+  slurm: ${output_dir}/slurm
+
+data:
+  public_dgs_corpus:
+    tfds: /shares/iict-sp2.ebling.cl.uzh/common/tensorflow_datasets
+    downloads: /shares/iict-sp2.ebling.cl.uzh/zifjia/backups/tensorflow_datasets_2/downloads
+  youtube_sl25:
+    root: /shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_VGG
+    videos: /shares/iict-sp2.ebling.cl.uzh/common/YouTube-SL-25_Colin_Leong
+  ncslgr:
+    root: /shares/sign-language.ebling.cl.uzh/NCSLGR
+  signsuisse:
+    root: /shares/sign-language.ebling.cl.uzh/Signsuisse

@@ -187,8 +187,6 @@ def main() -> None:
                              "benchmark so the column is consistent); 'sentence' = "
                              "the annotated sentence bounds, this model's own target")
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--tfds-root", default=dgs_data.TFDS_ROOT)
-    parser.add_argument("--backup", default=dgs_data.BACKUP)
     parser.add_argument("--label", default="2026",
                         help="model name for the results table; set it when "
                              "scoring a retrained checkpoint so the row is not "
@@ -241,10 +239,9 @@ def main() -> None:
     started = time.time()
     clips = []
 
-    clip_source = (dgs_data.iter_clips_native(split=args.split, backup=args.backup)
+    clip_source = (dgs_data.iter_clips_native(split=args.split)
                    if native else
-                   dgs_data.iter_clips(split=args.split, fps=args.fps,
-                                       tfds_root=args.tfds_root, backup=args.backup))
+                   dgs_data.iter_clips(split=args.split, fps=args.fps))
 
     for clip in clip_source:
         pose_data, frame_times = prepare(clip["pose"], clip["fps"], velocity=velocity)

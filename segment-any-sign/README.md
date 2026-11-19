@@ -89,6 +89,23 @@ conda activate sas2023
 
 See [`benchmark/`](benchmark/) for how the two are used together, and [`experiments/`](experiments/) for training runs.
 
+### Locations
+
+Every folder outside the repository (data, caches, checkpoints, logs) is a key in one paths file, and [`paths.py`](paths.py) is the only module that reads it.
+
+- `paths.uzh.yaml` holds the locations on the UZH cluster. It is read when `paths.local.yaml` does not exist, so at UZH there is no paths file to write: outputs go to `/scratch/<your user>/segment-any-sign`. One folder must be created by hand, once, before the first SLURM job: the log folder, with `python -m paths outputs.slurm`, because SLURM opens the log before the job script runs (see [`experiments/`](experiments/README.md#where-a-run-writes)).
+- `paths.local.yaml`, when it exists, is the only file read. The two files are never merged, so it must hold every key you use. It is not committed.
+- `paths.example.yaml` is the template, and says what each folder must contain.
+
+```bash
+cp paths.uzh.yaml paths.local.yaml       # at UZH, to change a location
+cp paths.example.yaml paths.local.yaml   # anywhere else: set output_dir and the data keys you need
+python -m paths                          # the file in use, and each location: ok, missing or not set
+python -m paths outputs.cache data.youtube_sl25.root   # check these as the code does, and print them
+```
+
+A location is checked when code uses it, not before, so a key you leave empty stops only the code that needs it. An output folder shown as `missing` is created when it is first used. A folder that cannot be reached, for example one inside the scratch folder of another user, is an error that names the key and the file, also in `python -m paths`, which then goes on with the other keys. The `sas2023` environment reads the same file, so it needs `pyyaml` too: an environment built before this file existed needs `pip install pyyaml`.
+
 ## Write-up
 
 The paper lives in [`latex/`](latex/), a submodule of the Overleaf project — so Overleaf *is* the git remote, and edits flow both ways.
