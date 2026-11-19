@@ -397,10 +397,11 @@ VIDEO_FOLDERS = ("ase/downloads", "non-ase/downloads")
 def video_path(clip_id: str):
     """The mp4 for a clip, or None. About 85% of YouTube dev clips have one; the
     Public DGS Corpus archive holds no video at all, only `.pose` and `.eaf`.
-    None for every clip when the paths file names no video folder."""
+    None for every clip when the paths file names no video folder, or names one
+    that cannot be reached: the figure then draws the pose."""
     import os
 
-    videos = paths.data("youtube_sl25.videos", required=False)
+    videos = paths.data("youtube_sl25.videos", required=False, must_exist=False)
     if videos is None:
         return None
     for folder in VIDEO_FOLDERS:

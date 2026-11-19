@@ -105,12 +105,14 @@ These protect the comparability of every number in the repository.
   inside the function that uses it, never at import, as a default argument or as a
   command-line default, so that a missing location stops only the code that needs it. Write
   no absolute path in project code: `tests/test_no_absolute_paths.py` fails if one appears.
-  The exceptions are the paths files, the `#SBATCH --output` and `--error` lines of a SLURM
-  script, which may name a folder only through SLURM's `%u`, and the `datasets/*/explore.py`
-  notebooks, which keep their locations in their configuration cell. A new location gets a
-  key in `paths.example.yaml`, with a comment that says what the folder must contain, and in
-  `paths.uzh.yaml`. Do not add a command-line option whose only purpose is to set a
-  location. Do not commit `paths.local.yaml`, and do not add credentials.
+  The exceptions are the paths files, the `#SBATCH` lines of a SLURM script, which may name
+  a folder only through SLURM's `%u`, and the `datasets/*/explore.py` notebooks, which keep
+  their locations in their configuration cell. The scan also leaves out `/dev/null` on a
+  command line of a shell script, and its own file, which holds the snippets it is tested
+  on. A new location gets a key in `paths.example.yaml`, with a comment that says what the
+  folder must contain, and in `paths.uzh.yaml`. Do not add a command-line option whose only
+  purpose is to set a location. Do not commit `paths.local.yaml`, and do not add
+  credentials.
 - Do not edit generated files by hand (for example `datasets/*/explore.md` and its
   `explore_files/`); edit the script that produces them, regenerate, and commit the result.
 - Follow the style of the surrounding code, and add no new lint errors in the files you

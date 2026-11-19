@@ -43,7 +43,8 @@ data:
     root:
     # Optional, used only for the keyframes in figures. Must contain
     # ase/downloads/<video id>/<video id>.mp4 and the same under non-ase/.
-    # Left empty, figures draw the pose instead.
+    # Left empty, or set to a folder that cannot be reached, figures draw the
+    # pose instead.
     videos:
   ncslgr:
     # Where datasets/ncslgr/download.py puts the archives. Created if

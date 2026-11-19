@@ -306,13 +306,12 @@ def test_video_path_looks_under_ase_then_non_ase(tmp_path, set_locations):
     assert video_path("vid_without_video") is None
 
 
-def test_video_path_with_a_folder_that_is_not_there_names_the_key(tmp_path, set_locations):
+def test_video_path_is_none_with_a_folder_that_is_not_there(tmp_path, set_locations):
     from experiments.plot_segmentation import video_path
 
+    # as when the key is not set: the figure then draws the pose
     set_locations({YOUTUBE_VIDEOS: tmp_path / "not_there"})
-    message = message_of(video_path, "vid_a")
-    assert YOUTUBE_VIDEOS in message
-    assert str(tmp_path / "not_there") in message
+    assert video_path("vid_a") is None
 
 
 # --- the class-weights cache -------------------------------------------------
