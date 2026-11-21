@@ -51,6 +51,9 @@ data:
   ncslgr:
     # Where datasets/ncslgr/download.py puts the archives. Created if
     # missing. The licence forbids redistribution: keep it private.
+    # datasets/ncslgr/explore.py reads what the script extracts and
+    # downloads there: videos/, video_index-20120129/ and
+    # signstream-xmlparser/.
     root:
   signsuisse:
     # Must contain example_mediapipe/<id>.pose, example_videos/<id>.mp4,

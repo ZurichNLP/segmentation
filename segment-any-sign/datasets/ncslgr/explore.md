@@ -42,9 +42,18 @@ share directory is group-only for the same reason.
 
 
 ```python
+import sys
 from pathlib import Path
 
-DATA_DIR = Path("/shares/sign-language.ebling.cl.uzh/NCSLGR")
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
+
+DATA_DIR = paths.data("ncslgr.root")
 VIDEO_DIR = DATA_DIR / "videos"
 INDEX_CSV = DATA_DIR / "video_index-20120129" / "video_index-20120129" / "files_by_video_name.csv"
 
@@ -111,11 +120,11 @@ print(f"git commit  {git('rev-parse', '--short', 'HEAD')}")
 print(f"data        {DATA_DIR}")
 ```
 
-    timestamp   2026-08-11T14:30:01
-    host        u24-cva0000-209
-    python      3.11.15 (/home/zifjia/data/conda/envs/sas)
-    git branch  segment-any-sign
-    git commit  b42b121
+    timestamp   2026-11-21T11:09:36
+    host        u24-chaihm0-632
+    python      3.11.18 (/home/gsantm/data/conda/envs/sas)
+    git branch  notebook-paths
+    git commit  2ee929b
     data        /shares/sign-language.ebling.cl.uzh/NCSLGR
 
 
@@ -313,6 +322,8 @@ print(f"  utterances {len(utterances):,}   gloss tokens {len(glosses):,}")
 ```
 
     parsing 3 XML files: ['accident.ss3', 'ali.ss3', 'ncslgr10a.ss3']
+
+
       utterances 157   gloss tokens 1,350
 
 
@@ -560,7 +571,9 @@ print(f"   total {sum(d for _, d in parts):.1f}s")
 ```python
 # pick an utterance with a good number of signs from the file we have video for
 EXAMPLE_FILE = next(f for f in utterances["file"].unique() if f.startswith("accident"))
-candidates = utterances[utterances["file"] == EXAMPLE_FILE].sort_values("n_glosses", ascending=False)
+# a stable sort: utterances share a count, and the default sort leaves their order open
+candidates = utterances[utterances["file"] == EXAMPLE_FILE].sort_values(
+    "n_glosses", ascending=False, kind="stable")
 example = candidates.iloc[min(3, len(candidates) - 1)]
 signs = glosses[(glosses["file"] == EXAMPLE_FILE)
                 & (glosses["utterance"] == example["utterance"])]
@@ -718,10 +731,10 @@ else:
     print("no frames decoded — check the video parts above")
 ```
 
-    findfont: Failed to find font weight semibold, now using 700.
+    findfont: Failed to find font weight semibold for DejaVu Sans, now using 700.
 
 
-    findfont: Failed to find font weight semibold, now using 700.
+    findfont: Failed to find font weight semibold for DejaVu Sans, now using 700.
 
 
 

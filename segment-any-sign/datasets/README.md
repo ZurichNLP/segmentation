@@ -27,7 +27,7 @@ Outside the repository. Code reads each folder from the paths file (see Location
 | `data.public_dgs_corpus.downloads` | download archive of that build: `.pose`, `.eaf`, `.cmdi` | `public_dgs_corpus/load.py`, `public_dgs_corpus/explore.py` |
 | `data.youtube_sl25.root` | poses, subtitles and metadata | `youtube_sl25/load.py` |
 | `data.youtube_sl25.videos` | the `.mp4` files; optional | `../experiments/plot_segmentation.py` |
-| `data.ncslgr.root` | download destination | `ncslgr/download.py` |
+| `data.ncslgr.root` | download destination: the videos, the video index and the XML sample | `ncslgr/download.py`, `ncslgr/explore.py` |
 | `data.signsuisse.root` | poses, videos, the test metadata and the ELAN files of the 2023 model | `signsuisse/run_2023_segmentation.py`, `signsuisse/explore.py` |
 | `data.bsl_corpus.root` | `info.pkl`, the index of Renz et al. (2021) | `bsl_corpus/explore.py` |
 | `data.how2sign.root` | the main copy: `video_level/` and `sentence_level/` | `how2sign/explore.py` |

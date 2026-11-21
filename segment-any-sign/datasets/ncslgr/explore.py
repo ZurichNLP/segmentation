@@ -43,9 +43,18 @@
 # ## Configuration
 
 # %%
+import sys
 from pathlib import Path
 
-DATA_DIR = Path("/shares/sign-language.ebling.cl.uzh/NCSLGR")
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
+
+DATA_DIR = paths.data("ncslgr.root")
 VIDEO_DIR = DATA_DIR / "videos"
 INDEX_CSV = DATA_DIR / "video_index-20120129" / "video_index-20120129" / "files_by_video_name.csv"
 
