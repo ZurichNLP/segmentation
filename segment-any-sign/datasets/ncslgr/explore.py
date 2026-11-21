@@ -343,7 +343,9 @@ print(f"   total {sum(d for _, d in parts):.1f}s")
 # %%
 # pick an utterance with a good number of signs from the file we have video for
 EXAMPLE_FILE = next(f for f in utterances["file"].unique() if f.startswith("accident"))
-candidates = utterances[utterances["file"] == EXAMPLE_FILE].sort_values("n_glosses", ascending=False)
+# a stable sort: utterances share a count, and the default sort leaves their order open
+candidates = utterances[utterances["file"] == EXAMPLE_FILE].sort_values(
+    "n_glosses", ascending=False, kind="stable")
 example = candidates.iloc[min(3, len(candidates) - 1)]
 signs = glosses[(glosses["file"] == EXAMPLE_FILE)
                 & (glosses["utterance"] == example["utterance"])]
