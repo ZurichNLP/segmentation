@@ -34,9 +34,9 @@ Outside the repository. Code reads each folder from the paths file (see Location
 | `data.how2sign.parsign_cache` | pose `.npz` of the parsign project, which owns the folder | `how2sign/explore.py` |
 | `data.mediapi_skel.tfds` | TFDS folder with the `mediapi_skel` build | `mediapi_skel/explore.py` |
 
-The main How2Sign folder was not found on the shares on 2026-11-20: `data.how2sign.root` in `paths.uzh.yaml` still names the folder it had, which does not exist now. [`how2sign/explore.md`](how2sign/explore.md) is the report of 2026-08-11 and could not be regenerated. Its code cell shows the two folders as the notebook named them then, and the notebook stops in that cell until the key names a folder that exists.
+The notebooks read the paths file too. Each `explore.py` asks for its folders in its configuration cell, which for `how2sign` and `mediapi_skel` is the cell that looks at the server, and finds `paths.py` from the working directory with the same lines in all six. A folder that is not there stops the notebook in that cell, with an error that names the key. A path in a text cell is an explanation of where the data was when the report was written, not what the code reads.
 
-The notebooks do not read the paths file yet: each `explore.py` names its folders in its configuration cell, near the top. The corpora that only a notebook reads (`bsl_corpus`, `how2sign`, `mediapi_skel`) have no key, and their folders are written there.
+The main How2Sign folder was not found on the shares on 2026-11-20: `data.how2sign.root` in `paths.uzh.yaml` still names the folder it had, which does not exist now. [`how2sign/explore.md`](how2sign/explore.md) is the report of 2026-08-11 and could not be regenerated. Its code cell shows the two folders as the notebook named them then, and the notebook stops in that cell until the key names a folder that exists.
 
 ## Licensing
 
