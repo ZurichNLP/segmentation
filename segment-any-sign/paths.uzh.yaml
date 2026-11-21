@@ -37,5 +37,9 @@ data:
     root: /shares/sign-language.ebling.cl.uzh/NCSLGR
   signsuisse:
     root: /shares/sign-language.ebling.cl.uzh/Signsuisse
+  how2sign:
+    # This folder was not found on 2026-11-20: see datasets/README.md.
+    root: /shares/iict-sp2.ebling.cl.uzh/common/How2Sign
+    parsign_cache: /shares/sign-language.ebling.cl.uzh/cache-dataset-parsign/How2Sign/how2sign
   mediapi_skel:
     tfds: /shares/iict-sp2.ebling.cl.uzh/common/tensorflow_datasets

@@ -29,7 +29,11 @@ Outside the repository. Code reads each folder from the paths file (see Location
 | `data.youtube_sl25.videos` | the `.mp4` files; optional | `../experiments/plot_segmentation.py` |
 | `data.ncslgr.root` | download destination | `ncslgr/download.py` |
 | `data.signsuisse.root` | poses, videos and the test metadata | `signsuisse/run_2023_segmentation.py` |
+| `data.how2sign.root` | the main copy: `video_level/` and `sentence_level/` | `how2sign/explore.py` |
+| `data.how2sign.parsign_cache` | pose `.npz` of the parsign project, which owns the folder | `how2sign/explore.py` |
 | `data.mediapi_skel.tfds` | TFDS folder with the `mediapi_skel` build | `mediapi_skel/explore.py` |
+
+The main How2Sign folder was not found on the shares on 2026-11-20: `data.how2sign.root` in `paths.uzh.yaml` still names the folder it had, which does not exist now. [`how2sign/explore.md`](how2sign/explore.md) is the report of 2026-08-11 and could not be regenerated. Its code cell shows the two folders as the notebook named them then, and the notebook stops in that cell until the key names a folder that exists.
 
 The notebooks do not read the paths file yet: each `explore.py` names its folders in its configuration cell, near the top. The corpora that only a notebook reads (`bsl_corpus`, `how2sign`, `mediapi_skel`) have no key, and their folders are written there.
 
