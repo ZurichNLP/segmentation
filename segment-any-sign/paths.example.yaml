@@ -51,10 +51,38 @@ data:
   ncslgr:
     # Where datasets/ncslgr/download.py puts the archives. Created if
     # missing. The licence forbids redistribution: keep it private.
+    # datasets/ncslgr/explore.py reads what the script extracts and
+    # downloads there: videos/, video_index-20120129/ and
+    # signstream-xmlparser/.
     root:
   signsuisse:
     # Must contain example_mediapipe/<id>.pose, example_videos/<id>.mp4,
     # metadata_test_de_dsgs.csv and metadata_test_dsgs_de.csv.
     # datasets/signsuisse/run_2023_segmentation.py writes its ELAN files into
     # a new folder beside example_mediapipe.
+    # datasets/signsuisse/explore.py also needs example_openpose/,
+    # no_example_ids.txt, and the ELAN files of the 2023 model in
+    # example_segmentation/v2023_e4s_60_50/, where the folder that the
+    # script wrote was moved.
     root:
+  bsl_corpus:
+    # Must contain info.pkl, the BSLCORPUS index of Renz et al. (2021).
+    # When the file is missing, datasets/bsl_corpus/explore.py writes it
+    # there from the branch `bsl` of this repository. Closed-access
+    # material: keep the folder private.
+    root:
+  how2sign:
+    # The main copy. Must contain video_level/ with raw_videos, mediapipe,
+    # subtitles_manual, subtitles_auto, subtitles_audio and segmentation,
+    # and sentence_level/{train,val,test}/rgb_front/eaf_files. Read only by
+    # datasets/how2sign/explore.py, which counts the files.
+    root:
+    # The pose cache of the parsign project: {train,val,test}/*.npz. It
+    # belongs to another project: read it, do not change it.
+    parsign_cache:
+  mediapi_skel:
+    # TensorFlow Datasets folder that contains the `mediapi_skel` build, as
+    # `tfds` of public_dgs_corpus contains `dgs_corpus`. Read only by
+    # datasets/mediapi_skel/explore.py, which needs dataset_info.json and
+    # features.json of the build, not its records.
+    tfds:

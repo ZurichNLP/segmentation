@@ -103,13 +103,15 @@ These protect the comparability of every number in the repository.
   paths file. `segment-any-sign/paths.py` is the only module that reads that file:
   `paths.uzh.yaml`, or `paths.local.yaml` when it exists. Other code asks it for a location
   inside the function that uses it, never at import, as a default argument or as a
-  command-line default, so that a missing location stops only the code that needs it. Write
-  no absolute path in project code: `tests/test_no_absolute_paths.py` fails if one appears.
-  The exceptions are the paths files, the `#SBATCH` lines of a SLURM script, which may name
-  a folder only through SLURM's `%u`, and the `datasets/*/explore.py` notebooks, which keep
-  their locations in their configuration cell. The scan also leaves out `/dev/null` on a
-  command line of a shell script, and its own file, which holds the snippets it is tested
-  on. A new location gets a key in `paths.example.yaml`, with a comment that says what the
+  command-line default, so that a missing location stops only the code that needs it. A
+  notebook `datasets/*/explore.py` is run and never imported, so it may ask for its
+  locations in its configuration cell. Write no absolute path in project code:
+  `tests/test_no_absolute_paths.py` fails if one appears. The exceptions are the paths files
+  and the `#SBATCH` lines of a SLURM script, which may name a folder only through SLURM's
+  `%u`. The scan also leaves out `/dev/null` on a command line of a shell script, and its
+  own file, which holds the snippets it is tested on. It reads string literals and command
+  lines, not comments, so a text cell of a notebook may name a folder as an explanation. A
+  new location gets a key in `paths.example.yaml`, with a comment that says what the
   folder must contain, and in `paths.uzh.yaml`. Do not add a command-line option whose only
   purpose is to set a location. Do not commit `paths.local.yaml`, and do not add
   credentials.

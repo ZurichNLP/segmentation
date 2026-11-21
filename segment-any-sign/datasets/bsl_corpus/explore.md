@@ -44,7 +44,16 @@ does **not** give is poses or usable video — see the notes at the end.
 
 ```python
 import subprocess
+import sys
 from pathlib import Path
+
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
 
 
 def find_repo_root():
@@ -61,7 +70,7 @@ REPO_ROOT = find_repo_root()
 # closed-access material and belongs with the media we expect to receive, not in
 # version control. The directory is group-only (drwxrws---, group
 # s3it_t_hpc_sign-language.ebling.cl.uzh) — keep it that way for anything added.
-DATA_DIR = Path("/shares/sign-language.ebling.cl.uzh/BSL_Corpus")
+DATA_DIR = paths.data("bsl_corpus.root")
 INFO_PKL = DATA_DIR / "info.pkl"
 
 # where it came from, if we need to restore it
@@ -106,11 +115,11 @@ print(f"git commit  {git('rev-parse', '--short', 'HEAD')}")
 print(f"info.pkl    blob {git('rev-parse', f'{SOURCE_REF}:{SOURCE_BLOB}')[:12]}")
 ```
 
-    timestamp   2026-08-10T17:53:50
-    host        u24-cva0000-209
-    python      3.11.15 (/home/zifjia/data/conda/envs/sas)
-    git branch  segment-any-sign
-    git commit  196896d
+    timestamp   2026-11-21T11:00:45
+    host        u24-chaihm0-632
+    python      3.11.18 (/home/gsantm/data/conda/envs/sas)
+    git branch  notebook-paths
+    git commit  032b3f4
     info.pkl    blob deccc4e31a6a
 
 
@@ -693,7 +702,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-    findfont: Failed to find font weight semibold, now using 700.
+    findfont: Failed to find font weight semibold for DejaVu Sans, now using 700.
 
 
 
