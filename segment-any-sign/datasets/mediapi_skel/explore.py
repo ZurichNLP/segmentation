@@ -60,9 +60,18 @@ print("  gloss annotation    NONE — subtitle alignment only")
 
 # %%
 import json
+import sys
 from pathlib import Path
 
-TFDS_DIR = Path("/shares/iict-sp2.ebling.cl.uzh/common/tensorflow_datasets/mediapi_skel")
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
+
+TFDS_DIR = paths.data("mediapi_skel.tfds") / "mediapi_skel"
 
 configs = sorted(p for p in TFDS_DIR.glob("*/*/dataset_info.json"))
 for path in configs:

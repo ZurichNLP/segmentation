@@ -29,6 +29,7 @@ Outside the repository. Code reads each folder from the paths file (see Location
 | `data.youtube_sl25.videos` | the `.mp4` files; optional | `../experiments/plot_segmentation.py` |
 | `data.ncslgr.root` | download destination | `ncslgr/download.py` |
 | `data.signsuisse.root` | poses, videos and the test metadata | `signsuisse/run_2023_segmentation.py` |
+| `data.mediapi_skel.tfds` | TFDS folder with the `mediapi_skel` build | `mediapi_skel/explore.py` |
 
 The notebooks do not read the paths file yet: each `explore.py` names its folders in its configuration cell, near the top. The corpora that only a notebook reads (`bsl_corpus`, `how2sign`, `mediapi_skel`) have no key, and their folders are written there.
 

@@ -37,3 +37,5 @@ data:
     root: /shares/sign-language.ebling.cl.uzh/NCSLGR
   signsuisse:
     root: /shares/sign-language.ebling.cl.uzh/Signsuisse
+  mediapi_skel:
+    tfds: /shares/iict-sp2.ebling.cl.uzh/common/tensorflow_datasets

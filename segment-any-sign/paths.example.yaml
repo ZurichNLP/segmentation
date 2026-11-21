@@ -58,3 +58,9 @@ data:
     # datasets/signsuisse/run_2023_segmentation.py writes its ELAN files into
     # a new folder beside example_mediapipe.
     root:
+  mediapi_skel:
+    # TensorFlow Datasets folder that contains the `mediapi_skel` build, as
+    # `tfds` of public_dgs_corpus contains `dgs_corpus`. Read only by
+    # datasets/mediapi_skel/explore.py, which needs dataset_info.json and
+    # features.json of the build, not its records.
+    tfds:
