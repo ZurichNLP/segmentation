@@ -24,7 +24,7 @@ Outside the repository. Code reads each folder from the paths file (see Location
 | Key | What | Read by |
 |---|---|---|
 | `data.public_dgs_corpus.tfds` | TFDS folder with the 25 fps `dgs_corpus` build | `public_dgs_corpus/load.py` (`iter_clips`), `../benchmark/predict_dgs_2023.py` |
-| `data.public_dgs_corpus.downloads` | download archive of that build: `.pose`, `.eaf`, `.cmdi` | `public_dgs_corpus/load.py` |
+| `data.public_dgs_corpus.downloads` | download archive of that build: `.pose`, `.eaf`, `.cmdi` | `public_dgs_corpus/load.py`, `public_dgs_corpus/explore.py` |
 | `data.youtube_sl25.root` | poses, subtitles and metadata | `youtube_sl25/load.py` |
 | `data.youtube_sl25.videos` | the `.mp4` files; optional | `../experiments/plot_segmentation.py` |
 | `data.ncslgr.root` | download destination | `ncslgr/download.py` |

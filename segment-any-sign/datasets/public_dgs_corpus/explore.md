@@ -25,10 +25,20 @@ reflect exactly what the model sees during training.
 
 
 ```python
+import sys
 from pathlib import Path
 
-# eaf/cmdi backup — the files the TFDS records reference
-DOWNLOADS = Path("/home/zifjia/sp2/zifjia/backups/tensorflow_datasets_2/downloads")
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
+
+# eaf/cmdi backup — the files the TFDS records reference.
+# True path, not the ~/sp2 symlink into it.
+DOWNLOADS = paths.data("public_dgs_corpus.downloads")
 
 
 def find_repo_root():
@@ -56,9 +66,9 @@ for path in (DOWNLOADS, SPLITS_PATH, ELAN_UTILS_PATH):
     print(f"{'OK  ' if path.exists() else 'MISSING'} {path}")
 ```
 
-    OK   /home/zifjia/sp2/zifjia/backups/tensorflow_datasets_2/downloads
-    OK   /home/zifjia/segmentation/sign_language_segmentation/datasets/dgs/splits.json
-    OK   /home/zifjia/segmentation/sign_language_segmentation/datasets/dgs/utils.py
+    OK   /shares/iict-sp2.ebling.cl.uzh/zifjia/backups/tensorflow_datasets_2/downloads
+    OK   /home/gsantm/repositories/segmentation/sign_language_segmentation/datasets/dgs/splits.json
+    OK   /home/gsantm/repositories/segmentation/sign_language_segmentation/datasets/dgs/utils.py
 
 
 ## Provenance
@@ -91,14 +101,14 @@ print(f"git dirty   {'yes' if git('status', '--porcelain') else 'no'}")
 print(f"data        {DOWNLOADS}")
 ```
 
-    timestamp   2026-08-06T16:50:36
-    host        u24-cva0000-302
-    python      3.11.15 (/home/zifjia/data/conda/envs/sas)
-    repo        /home/zifjia/segmentation
-    git branch  segment-any-sign
-    git commit  1da63ec
+    timestamp   2026-11-21T11:07:46
+    host        u24-chaihm0-632
+    python      3.11.18 (/home/gsantm/data/conda/envs/sas)
+    repo        /home/gsantm/repositories/segmentation
+    git branch  notebook-paths
+    git commit  f137655
     git dirty   yes
-    data        /home/zifjia/sp2/zifjia/backups/tensorflow_datasets_2/downloads
+    data        /shares/iict-sp2.ebling.cl.uzh/zifjia/backups/tensorflow_datasets_2/downloads
 
 
 ## Loading
@@ -823,7 +833,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-    findfont: Failed to find font weight semibold, now using 700.
+    findfont: Failed to find font weight semibold for DejaVu Sans, now using 700.
 
 
 
