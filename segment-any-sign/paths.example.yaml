@@ -57,6 +57,10 @@ data:
     # metadata_test_de_dsgs.csv and metadata_test_dsgs_de.csv.
     # datasets/signsuisse/run_2023_segmentation.py writes its ELAN files into
     # a new folder beside example_mediapipe.
+    # datasets/signsuisse/explore.py also needs example_openpose/,
+    # no_example_ids.txt, and the ELAN files of the 2023 model in
+    # example_segmentation/v2023_e4s_60_50/, where the folder that the
+    # script wrote was moved.
     root:
   bsl_corpus:
     # Must contain info.pkl, the BSLCORPUS index of Renz et al. (2021).

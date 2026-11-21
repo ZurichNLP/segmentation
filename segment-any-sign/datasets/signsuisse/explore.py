@@ -31,11 +31,20 @@
 # ## Configuration
 
 # %%
+import sys
 from pathlib import Path
+
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
 
 # true path, not a symlink into it. The dataset was migrated here from
 # /shares/easier.ebling.cl.uzh/WMT_23/signsuisse; metadata and media are identical.
-DATA_DIR = Path("/shares/sign-language.ebling.cl.uzh/Signsuisse")
+DATA_DIR = paths.data("signsuisse.root")
 
 # we use the test split, DSGS only — both translation directions
 TEST_FILES = ["metadata_test_de_dsgs.csv", "metadata_test_dsgs_de.csv"]
@@ -282,7 +291,7 @@ plt.show()
 # %%
 import pympi
 
-SEGMENTATION_DIR = DATA_DIR / "example_segmentation_v2023_e4s_60_50"
+SEGMENTATION_DIR = DATA_DIR / "example_segmentation" / "v2023_e4s_60_50"
 
 SIGN_AUTO_TIER, SENTENCE_AUTO_TIER, SIGN_MANUAL_TIER = "SIGN_AUTO", "SENTENCE_AUTO", "SIGN_MANUAL"
 

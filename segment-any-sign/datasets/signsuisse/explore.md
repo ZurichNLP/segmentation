@@ -30,11 +30,20 @@ Source: <https://www.wmt-slt.com/data>
 
 
 ```python
+import sys
 from pathlib import Path
+
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
 
 # true path, not a symlink into it. The dataset was migrated here from
 # /shares/easier.ebling.cl.uzh/WMT_23/signsuisse; metadata and media are identical.
-DATA_DIR = Path("/shares/sign-language.ebling.cl.uzh/Signsuisse")
+DATA_DIR = paths.data("signsuisse.root")
 
 # we use the test split, DSGS only — both translation directions
 TEST_FILES = ["metadata_test_de_dsgs.csv", "metadata_test_dsgs_de.csv"]
@@ -98,11 +107,11 @@ print(f"git dirty   {'yes' if git('status', '--porcelain') else 'no'}")
 print(f"data        {DATA_DIR}")
 ```
 
-    timestamp   2026-08-07T13:55:32
-    host        u24-cva0000-302
-    python      3.11.15 (/home/zifjia/data/conda/envs/sas)
-    git branch  segment-any-sign
-    git commit  7712ce5
+    timestamp   2026-11-21T11:07:08
+    host        u24-chaihm0-632
+    python      3.11.18 (/home/gsantm/data/conda/envs/sas)
+    git branch  notebook-paths
+    git commit  248b90c
     git dirty   yes
     data        /shares/sign-language.ebling.cl.uzh/Signsuisse
 
@@ -503,7 +512,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-    findfont: Failed to find font weight semibold, now using 700.
+    findfont: Failed to find font weight semibold for DejaVu Sans, now using 700.
 
 
 
@@ -589,7 +598,7 @@ annotation job before it starts.
 ```python
 import pympi
 
-SEGMENTATION_DIR = DATA_DIR / "example_segmentation_v2023_e4s_60_50"
+SEGMENTATION_DIR = DATA_DIR / "example_segmentation" / "v2023_e4s_60_50"
 
 SIGN_AUTO_TIER, SENTENCE_AUTO_TIER, SIGN_MANUAL_TIER = "SIGN_AUTO", "SENTENCE_AUTO", "SIGN_MANUAL"
 
