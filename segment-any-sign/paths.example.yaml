@@ -58,6 +58,12 @@ data:
     # datasets/signsuisse/run_2023_segmentation.py writes its ELAN files into
     # a new folder beside example_mediapipe.
     root:
+  bsl_corpus:
+    # Must contain info.pkl, the BSLCORPUS index of Renz et al. (2021).
+    # When the file is missing, datasets/bsl_corpus/explore.py writes it
+    # there from the branch `bsl` of this repository. Closed-access
+    # material: keep the folder private.
+    root:
   how2sign:
     # The main copy. Must contain video_level/ with raw_videos, mediapipe,
     # subtitles_manual, subtitles_auto, subtitles_audio and segmentation,

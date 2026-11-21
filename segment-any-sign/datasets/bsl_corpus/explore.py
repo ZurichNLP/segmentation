@@ -45,7 +45,16 @@
 
 # %%
 import subprocess
+import sys
 from pathlib import Path
+
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
 
 
 def find_repo_root():
@@ -62,7 +71,7 @@ REPO_ROOT = find_repo_root()
 # closed-access material and belongs with the media we expect to receive, not in
 # version control. The directory is group-only (drwxrws---, group
 # s3it_t_hpc_sign-language.ebling.cl.uzh) — keep it that way for anything added.
-DATA_DIR = Path("/shares/sign-language.ebling.cl.uzh/BSL_Corpus")
+DATA_DIR = paths.data("bsl_corpus.root")
 INFO_PKL = DATA_DIR / "info.pkl"
 
 # where it came from, if we need to restore it

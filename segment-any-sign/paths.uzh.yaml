@@ -37,6 +37,8 @@ data:
     root: /shares/sign-language.ebling.cl.uzh/NCSLGR
   signsuisse:
     root: /shares/sign-language.ebling.cl.uzh/Signsuisse
+  bsl_corpus:
+    root: /shares/sign-language.ebling.cl.uzh/BSL_Corpus
   how2sign:
     # This folder was not found on 2026-11-20: see datasets/README.md.
     root: /shares/iict-sp2.ebling.cl.uzh/common/How2Sign

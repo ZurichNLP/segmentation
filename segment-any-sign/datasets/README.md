@@ -29,6 +29,7 @@ Outside the repository. Code reads each folder from the paths file (see Location
 | `data.youtube_sl25.videos` | the `.mp4` files; optional | `../experiments/plot_segmentation.py` |
 | `data.ncslgr.root` | download destination | `ncslgr/download.py` |
 | `data.signsuisse.root` | poses, videos and the test metadata | `signsuisse/run_2023_segmentation.py` |
+| `data.bsl_corpus.root` | `info.pkl`, the index of Renz et al. (2021) | `bsl_corpus/explore.py` |
 | `data.how2sign.root` | the main copy: `video_level/` and `sentence_level/` | `how2sign/explore.py` |
 | `data.how2sign.parsign_cache` | pose `.npz` of the parsign project, which owns the folder | `how2sign/explore.py` |
 | `data.mediapi_skel.tfds` | TFDS folder with the `mediapi_skel` build | `mediapi_skel/explore.py` |
