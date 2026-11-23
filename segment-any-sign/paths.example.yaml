@@ -68,8 +68,9 @@ data:
   bsl_corpus:
     # Must contain info.pkl, the BSLCORPUS index of Renz et al. (2021).
     # When the file is missing, datasets/bsl_corpus/explore.py writes it
-    # there from the branch `bsl` of this repository. Closed-access
-    # material: keep the folder private.
+    # there from the branch `bsl` of this repository. It reads the local
+    # branch, which a new clone does not have: `git branch bsl origin/bsl`
+    # makes it. Closed-access material: keep the folder private.
     root:
   how2sign:
     # The main copy. Must contain video_level/ with raw_videos, mediapipe,
