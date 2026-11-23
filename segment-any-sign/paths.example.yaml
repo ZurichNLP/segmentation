@@ -58,12 +58,12 @@ data:
   signsuisse:
     # Must contain example_mediapipe/<id>.pose, example_videos/<id>.mp4,
     # metadata_test_de_dsgs.csv and metadata_test_dsgs_de.csv.
-    # datasets/signsuisse/run_2023_segmentation.py writes its ELAN files into
-    # a new folder beside example_mediapipe.
-    # datasets/signsuisse/explore.py also needs example_openpose/,
-    # no_example_ids.txt, and the ELAN files of the 2023 model in
-    # example_segmentation/v2023_e4s_60_50/, where the folder that the
-    # script wrote was moved.
+    # datasets/signsuisse/run_2023_segmentation.py writes its ELAN files
+    # beside example_mediapipe, into example_segmentation/v2023_<tag>_<b>_<o>/,
+    # named after the model and the sign thresholds: with its default
+    # arguments, example_segmentation/v2023_e4s_60_50/.
+    # datasets/signsuisse/explore.py reads the ELAN files of that folder, and
+    # also needs example_openpose/ and no_example_ids.txt.
     root:
   bsl_corpus:
     # Must contain info.pkl, the BSLCORPUS index of Renz et al. (2021).
