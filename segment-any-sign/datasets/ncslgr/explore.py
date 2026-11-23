@@ -43,9 +43,18 @@
 # ## Configuration
 
 # %%
+import sys
 from pathlib import Path
 
-DATA_DIR = Path("/shares/sign-language.ebling.cl.uzh/NCSLGR")
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
+
+DATA_DIR = paths.data("ncslgr.root")
 VIDEO_DIR = DATA_DIR / "videos"
 INDEX_CSV = DATA_DIR / "video_index-20120129" / "video_index-20120129" / "files_by_video_name.csv"
 
@@ -343,7 +352,9 @@ print(f"   total {sum(d for _, d in parts):.1f}s")
 # %%
 # pick an utterance with a good number of signs from the file we have video for
 EXAMPLE_FILE = next(f for f in utterances["file"].unique() if f.startswith("accident"))
-candidates = utterances[utterances["file"] == EXAMPLE_FILE].sort_values("n_glosses", ascending=False)
+# a stable sort: utterances share a count, and the default sort leaves their order open
+candidates = utterances[utterances["file"] == EXAMPLE_FILE].sort_values(
+    "n_glosses", ascending=False, kind="stable")
 example = candidates.iloc[min(3, len(candidates) - 1)]
 signs = glosses[(glosses["file"] == EXAMPLE_FILE)
                 & (glosses["utterance"] == example["utterance"])]

@@ -117,6 +117,16 @@ REPO_ROOT = find_repo_root()
 CACHE_DIR = REPO_ROOT / ".cache" / "v2023"
 
 
+def default_out_dir(poses: Path, tag: str, b: float, o: float) -> Path:
+    """Where the ELAN files go when --out is not given.
+
+    A folder of `example_segmentation`, beside the poses folder. With the default
+    arguments it is `example_segmentation/v2023_e4s_60_50`, which
+    `datasets/signsuisse/explore.py` reads.
+    """
+    return poses.parent / "example_segmentation" / f"v2023_{tag}_{int(b)}_{int(o)}"
+
+
 def extract_from_tag(blob: str, destination: Path) -> Path:
     """Pull a file out of the v2023 tag, caching it outside version control."""
     if destination.exists():
@@ -249,7 +259,8 @@ def main() -> None:
                         help="directory of .mp4 files to link (default: example_videos in "
                              "the same folder)")
     parser.add_argument("--out", type=Path, default=None,
-                        help="output dir (default: <data>/elan_2023_segmentation_<tag>_<b>_<o>)")
+                        help="output dir (default: example_segmentation/v2023_<tag>_<b>_<o> "
+                             "beside the poses folder)")
     parser.add_argument("--model", default="model_E4s-1.pth",
                         choices=["model_E4s-1.pth", "model_E1s-1.pth", "model.pth"],
                         help="v2023 checkpoint")
@@ -273,7 +284,7 @@ def main() -> None:
 
     # e.g. model_E4s-1.pth -> e4s
     tag = args.model.replace("model_", "").replace(".pth", "").split("-")[0].lower() or "default"
-    out_dir = args.out or args.poses.parent / f"example_segmentation_v2023_{tag}_{int(args.b)}_{int(args.o)}"
+    out_dir = args.out or default_out_dir(args.poses, tag, args.b, args.o)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.all_poses:

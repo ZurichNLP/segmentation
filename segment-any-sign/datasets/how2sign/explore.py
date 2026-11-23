@@ -86,10 +86,19 @@ PAPER
 
 # %%
 import glob
+import sys
 from pathlib import Path
 
-MAIN = Path("/shares/iict-sp2.ebling.cl.uzh/common/How2Sign")
-CACHE = Path("/shares/sign-language.ebling.cl.uzh/cache-dataset-parsign/How2Sign/how2sign")
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
+
+MAIN = paths.data("how2sign.root")
+CACHE = paths.data("how2sign.parsign_cache")
 
 
 def count(path, pattern="*"):

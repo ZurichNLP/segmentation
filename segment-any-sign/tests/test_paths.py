@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.project_files import ROOT, project_files
+from tests.project_files import ROOT, notebooks, project_files
 
 UZH = ROOT / "paths.uzh.yaml"
 EXAMPLE = ROOT / "paths.example.yaml"
@@ -705,6 +705,19 @@ def test_every_key_the_code_asks_for_is_in_both_committed_files():
     for file in (UZH, EXAMPLE):
         missing = sorted(asked - set(keys_of(file)))
         assert not missing, f"{file.name} lacks {missing}"
+
+
+def test_every_notebook_asks_paths_for_a_location():
+    # no table of notebooks and keys, so a notebook for a new corpus needs no change
+    # here. That its keys are in both committed files is the test above, and that it
+    # names no folder itself is the scan of tests/test_no_absolute_paths.py
+    found = notebooks()
+    assert found, "no notebook datasets/*/explore.py was found"
+    asking_for_nothing = [name for name in found
+                          if not keys_asked_for((ROOT / name).read_text())[0]]
+    assert not asking_for_nothing, (
+        "a notebook reads its folders from the paths file, with paths.data(...) at "
+        f"module level. These ask for no location: {asking_for_nothing}")
 
 
 def test_git_ignores_the_local_file():

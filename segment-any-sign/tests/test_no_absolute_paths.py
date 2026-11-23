@@ -12,19 +12,26 @@ hand-made snippets:
   default argument, decorator), and `paths.use_file` only in tests;
 * the shell scripts parse (`bash -n`).
 
-Not scanned: the notebooks `datasets/*/explore.py`, which keep their locations in
-their configuration cell, and this file, which holds the snippets.
+The notebooks `datasets/*/explore.py` are scanned for absolute paths like any
+other file. Their text cells are comments, so a text cell may name a folder as
+an explanation. They are left out of the second scan only: a notebook is run and
+never imported, so it may ask for its locations at module level. Two more tests
+are about them: no file imports a notebook, and the six find `paths.py` with the
+same lines.
+
+Not scanned: this file, which holds the snippets.
 """
 
 import ast
 import re
 import subprocess
+import sys
 from fnmatch import fnmatch
 from pathlib import Path
 
 import pytest
 
-from tests.project_files import NOTEBOOKS, ROOT, project_files
+from tests.project_files import NOTEBOOKS, ROOT, notebooks, project_files
 
 THIS_FILE = "tests/" + Path(__file__).name
 PATHS_MODULE = "paths.py"                    # it defines use_file and calls itself by bare names
@@ -187,6 +194,41 @@ def use_file_references(source: str) -> list[tuple[int, str]]:
     return _paths_names(ast.parse(source))[2]
 
 
+def notebook_imports(source: str) -> list[tuple[int, str]]:
+    """(line, text) for each import of a module called `explore`, as every notebook is."""
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            modules = [module, *(f"{module}.{alias.name}" for alias in node.names)]
+        else:
+            continue
+        if any(module.split(".")[-1] == "explore" for module in modules):
+            hits.append((node.lineno, ast.unparse(node)))
+    return hits
+
+
+def lines_that_find_paths(source: str) -> list[str]:
+    """The lines of a notebook that put `segment-any-sign/` on sys.path and import `paths`.
+
+    From the comment above `sys.path.insert(` to `import paths`. Empty when the
+    notebook has no such lines.
+    """
+    lines = source.splitlines()
+    if "import paths" not in lines:
+        return []
+    end = lines.index("import paths")
+    start = next((index for index in range(end, -1, -1)
+                  if lines[index].startswith("sys.path.insert(")), None)
+    if start is None:
+        return []
+    while start > 0 and lines[start - 1].startswith("#") and not lines[start - 1].startswith("# %%"):
+        start -= 1
+    return lines[start:end + 1]
+
+
 # --- the files ---------------------------------------------------------------
 
 def scanned(*suffixes: str) -> list[str]:
@@ -235,6 +277,16 @@ def test_detector_passes_what_is_not_an_absolute_path_in_python(source):
 def test_detector_gives_the_line_of_a_python_literal():
     source = 'A = "a/b"\n\nB = Path(\n    "/scratch/u/x")\n'
     assert python_hits(source) == [(4, "/scratch/u/x")]
+
+
+def test_detector_reads_the_code_cells_of_a_notebook_and_not_its_text_cells():
+    # a text cell is a comment: it may name a folder as an explanation
+    source = ('# %% [markdown]\n'
+              '# The file is stored at `/shares/group/corpus/info.pkl`.\n'
+              '\n'
+              '# %%\n'
+              'DATA_DIR = Path("/shares/group/corpus")\n')
+    assert python_hits(source) == [(5, "/shares/group/corpus")]
 
 
 @pytest.mark.parametrize("line, expected", [
@@ -317,6 +369,42 @@ def test_detector_finds_the_test_hook():
     assert use_file_references("import paths\ndef f():\n    return paths.output('cache')") == []
 
 
+@pytest.mark.parametrize("source", [
+    "import explore",
+    "import datasets.ncslgr.explore as notebook",
+    "from datasets.ncslgr import explore",
+    "from datasets.ncslgr.explore import parse_signstream",
+    "from . import explore",
+    "def f():\n    from .explore import parse_signstream",
+])
+def test_detector_flags_an_import_of_a_notebook(source):
+    assert len(notebook_imports(source)) == 1
+
+
+@pytest.mark.parametrize("source", [
+    "import paths",
+    "from datasets.public_dgs_corpus import load",
+    "from explorer import explore_all",
+    "explore = 'datasets/ncslgr/explore.py'",
+])
+def test_detector_passes_what_does_not_import_a_notebook(source):
+    assert notebook_imports(source) == []
+
+
+def test_the_lines_that_find_paths_are_cut_out_of_a_notebook():
+    source = ('# %% [markdown]\n# ## Configuration\n\n# %%\nimport sys\nfrom pathlib import Path\n\n'
+              '# where paths.py is\nsys.path.insert(0, next(\n    str(base) for base in bases))\n'
+              'import paths\n\nDATA_DIR = paths.data("corpus.root")\n')
+    assert lines_that_find_paths(source) == [
+        "# where paths.py is", "sys.path.insert(0, next(", "    str(base) for base in bases))",
+        "import paths"]
+    # the comment above stops at the cell marker, and a notebook may have no such lines
+    assert lines_that_find_paths("# %%\nsys.path.insert(0, '.')\nimport paths") \
+        == ["sys.path.insert(0, '.')", "import paths"]
+    assert lines_that_find_paths('# %%\nDATA_DIR = Path("corpus")\n') == []
+    assert lines_that_find_paths("# %%\nimport paths\n") == []
+
+
 # --- the scans of the project ------------------------------------------------
 
 def test_the_scan_reads_the_project_files():
@@ -325,7 +413,11 @@ def test_the_scan_reads_the_project_files():
     assert "experiments/train.py" in python
     assert "datasets/public_dgs_corpus/load.py" in python
     assert "experiments/pretrain_youtube.slurm" in shell
-    assert not [name for name in python if fnmatch(name, NOTEBOOKS)]
+    # the notebooks are read like any other file: every one that is on disk
+    on_disk = sorted(str(path.relative_to(ROOT)) for path in ROOT.glob(NOTEBOOKS))
+    assert "datasets/bsl_corpus/explore.py" in on_disk
+    assert notebooks() == on_disk
+    assert set(on_disk) <= set(python)
     assert THIS_FILE not in python
 
 
@@ -340,11 +432,51 @@ def test_no_absolute_path_in_project_code():
 
 
 def test_no_paths_call_runs_at_import():
-    hits = [(name, line, call) for name in scanned(".py") if name != PATHS_MODULE
+    # a notebook is run and never imported, so it may ask for its locations at
+    # module level: it is left out here, and test_no_file_imports_a_notebook
+    # holds the reason
+    hits = [(name, line, call) for name in scanned(".py")
+            if name != PATHS_MODULE and not fnmatch(name, NOTEBOOKS)
             for line, call in import_time_calls((ROOT / name).read_text())]
     assert not hits, (
         "a location is asked for inside the function that uses it, so that a missing "
         "one stops only the code that needs it. Calls that run at import:" + report(hits))
+
+
+def test_no_file_imports_a_notebook():
+    hits = [(name, line, text) for name in scanned(".py")
+            for line, text in notebook_imports((ROOT / name).read_text())]
+    assert not hits, (
+        "a notebook is run and never imported, which is why it may ask for its locations "
+        "at module level. Imports of a notebook:" + report(hits))
+
+
+def test_the_notebooks_find_paths_py_with_the_same_lines(tmp_path):
+    found = {name: lines_that_find_paths((ROOT / name).read_text()) for name in notebooks()}
+    assert found, "no notebook was found"
+    without = sorted(name for name, lines in found.items() if not lines)
+    assert not without, f"these notebooks have no lines that find paths.py: {without}"
+    blocks = {tuple(lines) for lines in found.values()}
+    assert len(blocks) == 1, "the notebooks find paths.py with different lines:\n" + "\n\n".join(
+        f"{name}:\n" + "\n".join(lines) for name, lines in found.items())
+
+    # the lines do what they are for in a new interpreter, from where a kernel starts:
+    # the folder of the notebook under jupytext, `segment-any-sign/` or the repository
+    # in an editor
+    program = ("import sys\nfrom pathlib import Path\n" + "\n".join(blocks.pop())
+               + "\nprint(sys.path[0])\nprint(paths.__file__)\n")
+
+    def run(folder: Path) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "-c", program], cwd=folder, check=False,
+                              capture_output=True, text=True)
+
+    for folder in (ROOT / "datasets" / "bsl_corpus", ROOT, ROOT.parent):
+        result = run(folder)
+        assert result.returncode == 0, f"from {folder}:\n{result.stderr}"
+        assert result.stdout.splitlines() == [str(ROOT), str(ROOT / "paths.py")], folder
+    # outside the repository there is nothing to find
+    outside = run(tmp_path)
+    assert outside.returncode != 0 and "StopIteration" in outside.stderr
 
 
 def test_use_file_is_only_used_in_tests():

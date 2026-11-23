@@ -26,11 +26,20 @@
 # ## Configuration
 
 # %%
+import sys
 from pathlib import Path
+
+# paths.py reads every location from the paths file. It is
+# in segment-any-sign/, found from the working directory.
+sys.path.insert(0, next(
+    str(base / "segment-any-sign")
+    for base in [Path.cwd(), *Path.cwd().parents]
+    if (base / "segment-any-sign" / "paths.py").is_file()))
+import paths
 
 # eaf/cmdi backup — the files the TFDS records reference.
 # True path, not the ~/sp2 symlink into it.
-DOWNLOADS = Path("/shares/iict-sp2.ebling.cl.uzh/zifjia/backups/tensorflow_datasets_2/downloads")
+DOWNLOADS = paths.data("public_dgs_corpus.downloads")
 
 
 def find_repo_root():
