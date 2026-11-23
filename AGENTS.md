@@ -105,7 +105,7 @@ These protect the comparability of every number in the repository.
   inside the function that uses it, never at import, as a default argument or as a
   command-line default, so that a missing location stops only the code that needs it. A
   notebook `datasets/*/explore.py` is run and never imported, so it may ask for its
-  locations in its configuration cell. Write no absolute path in project code:
+  locations at module level. Write no absolute path in project code:
   `tests/test_no_absolute_paths.py` fails if one appears. The exceptions are the paths files
   and the `#SBATCH` lines of a SLURM script, which may name a folder only through SLURM's
   `%u`. The scan also leaves out `/dev/null` on a command line of a shell script, and its

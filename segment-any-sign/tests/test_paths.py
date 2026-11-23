@@ -716,8 +716,8 @@ def test_every_notebook_asks_paths_for_a_location():
     asking_for_nothing = [name for name in found
                           if not keys_asked_for((ROOT / name).read_text())[0]]
     assert not asking_for_nothing, (
-        "a notebook reads its folders from the paths file, with paths.data(...) in its "
-        f"configuration cell. These ask for no location: {asking_for_nothing}")
+        "a notebook reads its folders from the paths file, with paths.data(...) at "
+        f"module level. These ask for no location: {asking_for_nothing}")
 
 
 def test_git_ignores_the_local_file():

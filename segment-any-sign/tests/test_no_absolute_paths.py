@@ -15,9 +15,9 @@ hand-made snippets:
 The notebooks `datasets/*/explore.py` are scanned for absolute paths like any
 other file. Their text cells are comments, so a text cell may name a folder as
 an explanation. They are left out of the second scan only: a notebook is run and
-never imported, so it may ask for its locations in its configuration cell. Two
-more tests are about them: no file imports a notebook, and the six find
-`paths.py` with the same lines.
+never imported, so it may ask for its locations at module level. Two more tests
+are about them: no file imports a notebook, and the six find `paths.py` with the
+same lines.
 
 Not scanned: this file, which holds the snippets.
 """
@@ -432,8 +432,8 @@ def test_no_absolute_path_in_project_code():
 
 
 def test_no_paths_call_runs_at_import():
-    # a notebook is run and never imported, so it may ask for its locations in its
-    # configuration cell: it is left out here, and test_no_file_imports_a_notebook
+    # a notebook is run and never imported, so it may ask for its locations at
+    # module level: it is left out here, and test_no_file_imports_a_notebook
     # holds the reason
     hits = [(name, line, call) for name in scanned(".py")
             if name != PATHS_MODULE and not fnmatch(name, NOTEBOOKS)
@@ -448,7 +448,7 @@ def test_no_file_imports_a_notebook():
             for line, text in notebook_imports((ROOT / name).read_text())]
     assert not hits, (
         "a notebook is run and never imported, which is why it may ask for its locations "
-        "in its configuration cell. Imports of a notebook:" + report(hits))
+        "at module level. Imports of a notebook:" + report(hits))
 
 
 def test_the_notebooks_find_paths_py_with_the_same_lines(tmp_path):

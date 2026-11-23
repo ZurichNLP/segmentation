@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]   # segment-any-sign/
 
 # percent-format notebooks. A notebook is run and never imported, so it may ask
-# for its locations in its configuration cell: see test_no_absolute_paths.py
+# for its locations at module level: see test_no_absolute_paths.py
 NOTEBOOKS = "datasets/*/explore.py"
 
 
