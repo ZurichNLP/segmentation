@@ -20,17 +20,32 @@ worth stating: our checkpoints are no longer selected the way the published 2026
 model was, and the mean is dominated by the sign level, since phrase mF1S runs
 far lower. `--select-on hm_iou` restores upstream's choice.
 
+**IoU, `%` and mF1S are computed on the segments of the decoder of the run**
+([`../metrics/decoders.py`](../metrics/decoders.py)), which `train.py` sets from
+`--decode`; frame F1 does not depend on it. So the decoder decides the selection
+metric too. Its name is kept in every checkpoint, as the hyperparameter `decode`.
+
 **Train and validation are not measured on the same thing**, and the overlay
 should be read with that in mind: training batches are random 1024-frame windows
 with augmentation applied, while validation runs whole videos with none. Expect
 train to look easier. The gap between the curves is still the useful signal — it
 is where overfitting shows up.
 
-Cost: none at validation. Upstream runs two forward passes per validation batch
-and ours would be a third, so instead the forward is computed once and cached for
-all three — which makes validation *cheaper* than it was before these metrics
-existed. Training pays one extra forward every `metrics_every_n_steps` steps
-(9, about once per epoch at batch 64).
+Cost of the forward passes: none at validation. Upstream runs two forward passes
+per validation batch and ours would be a third, so instead the forward is computed
+once and cached for all three — which makes validation one forward pass *cheaper*
+than it was before these metrics existed. Training pays one extra forward every
+`metrics_every_n_steps` steps (9, about once per epoch at batch 64). Scoring is
+not free: the matching behind mF1S is the expensive part of a validation, and it
+is paid for each decoder (see the paragraph on the other decoders below).
+
+**The other decoders are scored at validation too**: IoU, `%` and mF1S of each
+decoder that is not the decoder of the run, logged for each validation set under
+`decoders/`, with the name of the decoder at the end. They are for reading, and
+nothing selects on them. Decoding costs next to nothing, but the matching behind
+mF1S is paid once more for each decoder: on DGS validation that was 60 to 90 s
+more for each validation, measured on the labels of two runs of November 2026.
+Train batches score the decoder of the run only.
 
 **Padding is masked** ([`masked_model.py`](masked_model.py)): every forward here
 passes the batch's `lengths`, and the model's BatchNorm is the masked one, so a
@@ -52,9 +67,9 @@ from sign_language_segmentation.metrics import bio_labels_to_segments  # noqa: E
 from sign_language_segmentation.model.model import PoseTaggingModel  # noqa: E402
 from sign_language_segmentation.utils.bio import BIO  # noqa: E402
 
-from metrics import (bio_to_segments, frame_f1, frame_f1_micro,  # noqa: E402
-                     global_iou, mf1s_from_counts, segment_counts,
-                     segment_percentage)
+from metrics import (DECODERS, choose_decoder, frame_f1,  # noqa: E402
+                     frame_f1_micro, global_iou, mf1s_from_counts,
+                     segment_counts, segment_percentage)
 
 from experiments.masked_model import (masked_encode, masked_forward,  # noqa: E402
                                       use_masked_batchnorm)
@@ -77,8 +92,10 @@ CLASSES = ("O", "B", "I")
 
 
 def _empty() -> dict:
+    # "others" holds, by decoder name, IoU, % and mF1S counts of the decoders
+    # that are not the decoder of the run. It stays empty outside validation.
     return {our: {"frame_f1": [], "frame_f1_micro": [], "iou": [], "percentage": [],
-                  "counts": None, "confusion": None}
+                  "counts": None, "confusion": None, "others": {}}
             for our in LEVELS.values()}
 
 
@@ -105,6 +122,14 @@ class ValidationMetricsModel(PoseTaggingModel):
     #: gold wastes a decode per clip.
     levels = ("sign", "sentence")
 
+    #: The decoder of the run (`metrics/decoders.py`): it turns the predicted
+    #: labels into the segments that IoU, `%` and mF1S are computed on, so it
+    #: decides the selection metric and with it the checkpoint that is kept.
+    #: `train.py` sets it from `--decode` before the model is constructed; left
+    #: alone it is the default, `b-honouring`. Its name is kept in the
+    #: checkpoint: see `__init__`.
+    decoder = choose_decoder(None)
+
     #: gradient accumulation, so the LR schedule can be sized in *optimiser*
     #: steps. Upstream is handed batches per epoch and OneCycleLR steps once per
     #: optimiser step, so with accumulation the schedule would be N times too
@@ -116,6 +141,14 @@ class ValidationMetricsModel(PoseTaggingModel):
         # same parameters and buffers, so checkpoints stay interchangeable with
         # plain PoseTaggingModel; only training statistics on padded batches differ
         use_masked_batchnorm(self.frame_cnn)
+        # The decoder belongs to the model: the checkpoint was selected with it.
+        # Upstream's `__init__` has saved its own arguments as hyperparameters,
+        # which Lightning writes into every checkpoint under `hyper_parameters`;
+        # this adds one key to them, `decode`. Plain `PoseTaggingModel` still
+        # loads such a checkpoint, because its `**kwargs` takes the key, but it
+        # does not keep it: `load_checkpoint` of benchmark/predict_dgs_2026.py
+        # reads it from the file.
+        self.save_hyperparameters({"decode": self.decoder.name})
         if self.accumulate > 1:
             import math
             self.steps_per_epoch = max(1, math.ceil(self.steps_per_epoch
@@ -157,8 +190,15 @@ class ValidationMetricsModel(PoseTaggingModel):
             return self._cached_log_probs
         return masked_forward(self, pose_data, timestamps, lengths)
 
-    def _accumulate(self, batch, collected: dict, log_probs=None) -> None:
-        """Score one batch into `collected`, exactly as benchmark/score.py would."""
+    def _accumulate(self, batch, collected: dict, log_probs=None,
+                    others: bool = False) -> None:
+        """Score one batch into `collected`, exactly as benchmark/score.py would.
+
+        With `others`, the segment metrics of the decoders that are not the
+        decoder of the run are collected too, under `others` of each level. Only
+        validation asks for it: the matching behind mF1S is the expensive part
+        of scoring, and it is paid once more for each decoder.
+        """
         with torch.no_grad():
             if log_probs is None:
                 log_probs = self.forward(batch["pose"],
@@ -185,14 +225,14 @@ class ValidationMetricsModel(PoseTaggingModel):
                     # bf16, which numpy cannot convert (upstream's own
                     # likeliest_probs_to_segments trips on this too)
                     probs = log_probs[upstream_name][i][:num_frames].cpu().float()
-                    # not upstream's likeliest_probs_to_segments: that one never
-                    # looks at B, so back-to-back segments can only ever be
-                    # counted as one. bio_to_segments is the 2023 paper's
-                    # Algorithm 1 at argmax, and restores a reachable % of 1.
-                    pred_segments = bio_to_segments(
-                        probs.argmax(dim=1).numpy(), b=BIO["B"], i=BIO["I"])
                     gold_bio = _remap(gold[:num_frames].cpu()).numpy()
                     pred_bio = _remap(probs.argmax(dim=1)).numpy()
+                    # The decoder of the run, on the labels in our ids (UNK
+                    # became O, which every decoder treats alike). Which one
+                    # matters: `b-ignoring` never looks at B, so two segments
+                    # that touch are one; `b-honouring` needs a B to open a
+                    # segment, so a model that predicts few B gets few segments.
+                    pred_segments = self.decoder.decode(pred_bio)
 
                     bucket = collected[our]
                     # gold x pred counts over O/B/I, summed across clips. Macro and
@@ -212,6 +252,24 @@ class ValidationMetricsModel(PoseTaggingModel):
                     counts = segment_counts(pred_segments, gold_segments)
                     bucket["counts"] = counts if bucket["counts"] is None \
                         else bucket["counts"] + counts
+
+                    if not others:
+                        continue
+                    # the same labels under each other decoder: what the segment
+                    # metrics of this model would be with it. Frame F1 is not
+                    # repeated, since no decoder moves it.
+                    for name, decoder in DECODERS.items():
+                        if name == self.decoder.name:
+                            continue
+                        other = bucket["others"].setdefault(
+                            name, {"iou": [], "percentage": [], "counts": None})
+                        segments = decoder.decode(pred_bio)
+                        other["iou"].append(global_iou(segments, gold_segments, num_frames))
+                        other["percentage"].append(
+                            segment_percentage(segments, gold_segments))
+                        counts = segment_counts(segments, gold_segments)
+                        other["counts"] = counts if other["counts"] is None \
+                            else other["counts"] + counts
 
     def step(self, batch, name: str):
         """Upstream's step, restricted to the heads that carry supervision.
@@ -305,6 +363,25 @@ class ValidationMetricsModel(PoseTaggingModel):
             self.log(f"{prefix}_mean_mf1s",
                      sum(mf1s.get(our, 0.0) for our in supervised) / len(supervised),
                      prog_bar=(prefix == "validation"))
+
+    def _log_other_decoders(self, collected: dict, prefix: str) -> None:
+        """IoU, `%` and mF1S of the decoders that are not the decoder of the run.
+
+        Under a `decoders/` prefix of their own, with the name of the decoder at
+        the end: `decoders/validation_dgs_corpus_sign_iou_b-ignoring`. They are
+        for reading only. Nothing selects on them, and the metrics of the decoder
+        of the run keep their names.
+        """
+        for our, bucket in collected.items():
+            for name, other in bucket["others"].items():
+                if not other["iou"]:
+                    continue
+                stem = f"decoders/{prefix}_{our}"
+                self.log(f"{stem}_iou_{name}", sum(other["iou"]) / len(other["iou"]))
+                self.log(f"{stem}_percentage_{name}",
+                         sum(other["percentage"]) / len(other["percentage"]))
+                # micro over the corpus, as for the decoder of the run
+                self.log(f"{stem}_mf1s_{name}", mf1s_from_counts(other["counts"]))
 
     def _log_classes(self, collected: dict, prefix: str) -> None:
         """Per-class shares and scores, under a `classes/` prefix of their own.
@@ -410,7 +487,8 @@ class ValidationMetricsModel(PoseTaggingModel):
         finally:
             self._cached_log_probs = None
 
-        self._accumulate(batch, self._val_collected[name], log_probs=log_probs)
+        self._accumulate(batch, self._val_collected[name], log_probs=log_probs,
+                         others=True)
         return loss
 
     def on_validation_epoch_end(self) -> None:
@@ -423,6 +501,8 @@ class ValidationMetricsModel(PoseTaggingModel):
 
         for index, name in enumerate(self.val_dataset_names):
             self._log_collected(self._val_collected[name], f"validation_{name}")
+            # once for each set, under its own name: nothing monitors these
+            self._log_other_decoders(self._val_collected[name], f"validation_{name}")
             if index == 0:
                 # the in-domain set also supplies the unqualified names the
                 # trainer monitors for checkpointing and early stopping

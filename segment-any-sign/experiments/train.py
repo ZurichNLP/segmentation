@@ -44,6 +44,14 @@ self-evidently throwaway; a dry run also deletes its own run directory.
                                   what the best checkpoint maximises. Default is
                                   the mean of sign and phrase mF1S; upstream used
                                   hm_iou.
+    --decode {b-honouring,b-ignoring,i-runs-kept}
+                                  the decoder of the run (../metrics/decoders.py):
+                                  how predicted labels become segments at
+                                  validation, so it decides the selection metric
+                                  and the checkpoint that is kept. Default
+                                  b-honouring. Its name is kept in every
+                                  checkpoint of the run, and the scripts that run
+                                  when training ends read it there.
 
 `dist` is a link, made here, to the folder `outputs.dist` of the paths file
 (`../paths.py`): a run folder is `dist/<run>` relative to `segment-any-sign/`,
@@ -102,6 +110,8 @@ import paths
 
 
 def main() -> None:
+    from metrics import decoder_names
+
     # Take our flags out of argv first: upstream's args.py calls parse_args() at
     # import time and rejects anything it does not know.
     ours = argparse.ArgumentParser(add_help=False)
@@ -177,6 +187,15 @@ def main() -> None:
                       help="checkpoint selection metric (default mean_mf1s: the "
                            "mean of mF1S over the supervised levels; hm_iou is "
                            "upstream's, and needs both heads)")
+    ours.add_argument("--decode", default=None, choices=decoder_names(aliases=True),
+                      help="the decoder of the run: how predicted labels become "
+                           "segments at validation, and so what the selection "
+                           "metric is computed on. b-honouring (default) opens a "
+                           "segment only on a B; b-ignoring makes one segment of "
+                           "any run of labels that are not O; i-runs-kept cuts "
+                           "those runs at a B. The name is kept in the "
+                           "checkpoint, where predict_dgs_2026.py, "
+                           "eval_youtube.py and plot_segmentation.py read it")
     ours.add_argument("--num-workers", type=int, default=None,
                       help="dataloader workers (upstream hardcodes 8). Default "
                            "is min(32, CPUs allocated to this job): reading is "
@@ -498,7 +517,14 @@ def main() -> None:
     args.class_weighting = weighting
     args.class_weights_from = mine.weights_from or args.datasets.split(",")[0]
 
+    # The decoder of the run: --decode, else the default, b-honouring. The person
+    # who launches the run chooses it; nothing here derives it from the recipe.
+    decoder = set_decoder(args, mine.decode)
+
     report_effective_config(args, mine, _dated_run_name(args.run_name))
+    # said once, after the configuration it is about; it changes and stops nothing
+    if warning := decoder_warning(weighting, decoder.name):
+        print(warning)
 
     run_dir = Path("dist") / _dated_run_name(args.run_name)
 
@@ -849,6 +875,48 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
     return weights
 
 
+def set_decoder(args, given: str | None):
+    """Give the run its decoder, in the three places that must agree, and return it.
+
+    `given` is the value of `--decode`, by its name of today or an earlier one,
+    or None when the option was not given: then the default
+    (`metrics.choose_decoder`).
+
+      * `ValidationMetricsModel.decoder`: validation decodes with it, so the
+        selection metric and the checkpoint that is kept follow it;
+      * a model built after this keeps the name as the hyperparameter `decode`,
+        and Lightning writes it into every checkpoint of the run;
+      * `args.decode`: the name goes into run_config.json and W&B.
+    """
+    from metrics import choose_decoder
+
+    from experiments.validation_metrics import ValidationMetricsModel
+
+    decoder = choose_decoder(given)
+    ValidationMetricsModel.decoder = decoder
+    args.decode = decoder.name
+    return decoder
+
+
+def decoder_warning(weighting: str, decoder: str) -> str | None:
+    """One line for the log when a run without class weights decodes with b-honouring.
+
+    `weighting` is the class weighting after `--class-weights auto` was resolved,
+    and `decoder` the name of the decoder of the run. A model trained without
+    class weights predicts few B, and `b-honouring` opens a segment only on a B,
+    so validation finds few segments and the selection metric says little. The
+    line says so and names the option. Nothing else follows from it: the decoder
+    stays the one that was chosen, and the run goes on. None in every other case.
+    """
+    if weighting != "none" or decoder != "b-honouring":
+        return None
+    return ("warning: this run trains without class weights and decodes with "
+            "b-honouring, which opens a segment only on a B. A model trained "
+            "without class weights predicts few B, so validation may find few "
+            "segments and the selection metric may stay low. --decode b-ignoring "
+            "does not read B.")
+
+
 def report_effective_config(args, mine, run_name: str) -> None:
     """Print what this run will actually use, after every override is applied.
 
@@ -899,6 +967,8 @@ def report_effective_config(args, mine, run_name: str) -> None:
           + (f", measured on {args.class_weights_from}"
              if args.class_weights_from != args.datasets.split(",")[0] else "")
           + f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
+          + f"\n  decoder     {args.decode}  (labels to segments, at validation "
+            "and in the checkpoint)"
           + (f"\n  LIMIT       {args.limit} clips per split — NOT a reportable run"
              if args.limit else ""))
 
@@ -1140,6 +1210,10 @@ def evaluate_best_checkpoint(run_dir: Path, phrase: str, split: str,
     `benchmark/predictions/` — separate directories so that
     `score.py benchmark/predictions/*.json` can never silently mix a dev score
     into the benchmark table.
+
+    No script is given a decoder here: the prediction, the YouTube scores and
+    the figures each read the decoder of the run from the checkpoint, where
+    training kept it.
     """
     import subprocess
 
@@ -1269,6 +1343,8 @@ def dry_run(args) -> None:
     loss = model.step(batch, name="dry_run")
     print(f"levels         {ValidationMetricsModel.levels}"
           f"  class weights {'set' if ValidationMetricsModel.class_weights else 'none'}")
+    print(f"decoder        {model.decoder.name}"
+          f"  (kept in the checkpoint as decode={model.hparams['decode']})")
     print(f"loss           {float(loss):.4f}")
     print("\ndry run OK — data, model and loss all wire up")
 

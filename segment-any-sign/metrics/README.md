@@ -45,6 +45,18 @@ Their **exclusive-end** convention is *not* a bug and is left alone — their se
 - **`segment_percentage`** is in the paper but was dropped upstream; restored.
 - **`hm_IoU`** is upstream but not in the paper, so comparable to nothing published. Derivable from the two IoU columns if ever wanted.
 
+## Decoders
+
+A model gives one label for each frame, and the segment metrics need segments. A decoder makes that step, and [`decoders.py`](decoders.py) holds them all: every script that decodes takes one from there, by name.
+
+| name | class | rule |
+|---|---|---|
+| `b-honouring` | `BHonouring` | a segment opens only on a B (`bio_to_segments`); a run of I without a B gives no segment |
+| `b-ignoring` | `BIgnoring` | any run of labels that are not O is one segment; B is not read |
+| `i-runs-kept` | `IRunsKept` | a B opens a segment and closes the one that is open, where a run of B is one boundary; an O closes it; and a run of I without a B is a segment too |
+
+`iou`, `percentage` and `mf1s` depend on the decoder; the two frame F1s do not. `2023` and `upstream` are the earlier names of the first two, and are still read. `choose_decoder` is the order in which a decoder is found: the name given in that run, then the name stored with the model, then `b-honouring`.
+
 ## Conventions
 
 A segment is `{"start": int, "end": int}` in **frames**, both bounds **inclusive** (length `end - start + 1`). BIO labels are `0 = O`, `1 = B`, `2 = I`. Out-of-range segments are clipped, not rejected.
@@ -67,7 +79,7 @@ Sign and phrase level kept separate, as in Table 1 of the 2023 paper. Most datas
 conda activate sas && cd segment-any-sign && pytest tests/
 ```
 
-This runs every test of the project, not only the tests of the metrics. The metric tests are [`tests/test_segmentation.py`](../tests/test_segmentation.py), 45 tests: each metric's definition and edge cases, the disagreements above, greedy-versus-optimal matching, micro-versus-macro aggregation, and inclusive-bound arithmetic. The other files of [`tests/`](../tests/) test the record of the code a run started from, the paths file, the locations the loaders read, where a training run writes, and that no absolute path is written in project code.
+This runs every test of the project, not only the tests of the metrics. The metric tests are [`tests/test_segmentation.py`](../tests/test_segmentation.py), 45 tests: each metric's definition and edge cases, the disagreements above, greedy-versus-optimal matching, micro-versus-macro aggregation, and inclusive-bound arithmetic. The decoders are tested in [`tests/test_decoders.py`](../tests/test_decoders.py): each one on short sequences written by hand, `i-runs-kept` against its definition, `b-ignoring` against the function of the upstream package, the names, and every committed prediction file against the decoder it names. How each script takes its decoder is tested in [`tests/test_decoder_use.py`](../tests/test_decoder_use.py): the order (`--decode`, the model, `b-honouring`), the name kept in a checkpoint, and that no file outside `metrics/` names one of the two decoding functions, `bio_to_segments` and `likeliest_probs_to_segments`, in its code. The other files of [`tests/`](../tests/) test the record of the code a run started from, the paths file, the locations the loaders read, where a training run writes, and that no absolute path is written in project code.
 
 The full run needs the `sas` environment, where no test is skipped. Outside it the tests need pytest, numpy, scikit-learn and pyyaml. A test that needs any other package is skipped when that package is not installed, and `pytest tests/ -rs` names the package. pyyaml is needed by every test, also by the metric tests when they are run alone with `pytest tests/test_segmentation.py`: [`tests/conftest.py`](../tests/conftest.py) gives each test a paths file of its own, and writes it with pyyaml.
 

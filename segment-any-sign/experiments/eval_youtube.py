@@ -3,11 +3,16 @@
 The DGS side has had `benchmark/predict_dgs_2026.py` plus `score.py` since the
 start; YouTube has only ever been scored inside the training loop, which means a
 finished checkpoint could not be re-scored without retraining. This closes that
-gap, using the same [`../metrics/`](../metrics/) code and the same decoder as
-everything else, so a row here is comparable to a row from either.
+gap, using the same [`../metrics/`](../metrics/) code as everything else, so a
+row here is comparable to a row from either when the decoder is the same.
+
+The decoder follows the order of every script: `--decode` of this run, then the
+decoder kept in the checkpoint (the one of its training run), then
+`b-honouring`. The scores printed and written say which it was.
 
     python experiments/eval_youtube.py --run 02_pretrain_youtube_b80-2026.09.10
     python experiments/eval_youtube.py --run <run> --set raw   # one set only
+    python experiments/eval_youtube.py --run <run> --decode i-runs-kept
 
 `raw` is all 167 dev videos, the set checkpoints are selected on. `filtered` is
 the 82 of those whose subtitle timings survive `DEV_FILTER`, reported beside it
@@ -30,12 +35,16 @@ import paths
 
 
 def score(checkpoint: Path, dev_filter: bool, device: str, limit: int = None,
-          level: str = "sentence") -> dict:
+          level: str = "sentence", decode: str | None = None) -> dict:
     """Run the model over each dev clip and pool the four metrics.
 
     Per-clip means for frame F1, IoU and `%`; mF1S from counts pooled over the
     corpus, never averaged per clip — that is how `score.py` does it and mixing
     the two conventions is how two numbers for one model start to disagree.
+
+    `decode` is the value of `--decode`, or None when it was not given: then the
+    decoder kept in the checkpoint is used, and `b-honouring` when it keeps
+    none. The result names the decoder under `decode`.
     """
     import torch
     from pose_format import Pose
@@ -47,10 +56,11 @@ def score(checkpoint: Path, dev_filter: bool, device: str, limit: int = None,
 
     from benchmark.predict_dgs_2026 import load_checkpoint
     from datasets.youtube_sl25 import load as yt
-    from metrics import (bio_to_segments, frame_f1, frame_f1_micro, global_iou,
+    from metrics import (choose_decoder, frame_f1, frame_f1_micro, global_iou,
                          mf1s_from_counts, segment_counts, segment_percentage)
 
     model = load_checkpoint(str(checkpoint), device=device)
+    decoder = choose_decoder(decode, model.stored_decode)
     velocity = tuple(getattr(model.hparams, "pose_dims", (50, 6)))[1] >= 6
 
     specs = list(yt.clip_specs("dev", dev_filter=dev_filter))[:limit]
@@ -85,11 +95,11 @@ def score(checkpoint: Path, dev_filter: bool, device: str, limit: int = None,
             continue
 
         predicted = log_probs[level][0].cpu().float().numpy().argmax(axis=1)
-        pred_segments = bio_to_segments(predicted, b=BIO["B"], i=BIO["I"])
-        # upstream ids to ours, the convention every metric here expects
+        # upstream ids to ours, the convention every metric and decoder expects
         remap = {BIO["O"]: 0, BIO["B"]: 1, BIO["I"]: 2}
         gold_bio = np.array([remap.get(int(v), 0) for v in gold])
         pred_bio = np.array([remap.get(int(v), 0) for v in predicted])
+        pred_segments = decoder.decode(pred_bio)
 
         pooled["frame_f1"].append(frame_f1(pred_bio, gold_bio, labels=None))
         pooled["frame_f1_micro"].append(
@@ -106,10 +116,13 @@ def score(checkpoint: Path, dev_filter: bool, device: str, limit: int = None,
     result["mf1s"] = float(mf1s_from_counts(counts)) if counts is not None else 0.0
     result["clips"] = len(pooled["frame_f1"])
     result["skipped"] = skipped
+    result["decode"] = decoder.name
     return result
 
 
 def main() -> None:
+    from metrics import decoder_names
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True, help="run directory under dist/")
     parser.add_argument("--which", default="best", choices=["best", "last"])
@@ -119,6 +132,11 @@ def main() -> None:
                              "filtered: the 82 passing DEV_FILTER")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--decode", default=None, choices=decoder_names(aliases=True),
+                        help="how the argmax labels become segments. Not given: "
+                             "the decoder kept in the checkpoint, else "
+                             "b-honouring. '2023' and 'upstream' are the earlier "
+                             "names of b-honouring and b-ignoring")
     parser.add_argument("--json", type=Path, default=None,
                         help="also write the scores here, keyed by set — what "
                              "add_result_row.py reads")
@@ -132,9 +150,11 @@ def main() -> None:
     for name in sets:
         print(f"{args.run} / {args.which}   dev set: {name}")
         result = results[name] = score(checkpoint, dev_filter=name == "filtered",
-                                       device=args.device, limit=args.limit)
+                                       device=args.device, limit=args.limit,
+                                       decode=args.decode)
         print(f"{result['clips']} clips scored"
-              + (f", {result['skipped']} skipped" if result["skipped"] else ""))
+              + (f", {result['skipped']} skipped" if result["skipped"] else "")
+              + f", decoder {result['decode']}")
         print("  F1-ma {frame_f1:.3f}   F1-mi {frame_f1_micro:.3f}   "
               "IoU {iou:.3f}   % {percentage:.3f}   mF1S {mf1s:.3f}\n"
               .format(**result))

@@ -10,6 +10,8 @@ Same rule [`../metrics/`](../metrics/) follows for metric definitions. It fixes 
 
 A model's dedicated **preprocessing is not part of the protocol**: that is the model, not the measurement.
 
+Nor is its **decoder**, the step from the label of each frame to segments ([`../metrics/`](../metrics/README.md#decoders)): it belongs to the row. Rows are reported by one rule: a model trained **without class weights** with the `b-ignoring` decoder, a model trained **with class weights** with the `b-honouring` decoder. A model trained without class weights predicts few B, and `b-honouring` opens a segment only on a B. No script applies the rule: the person who launches a run or scores a checkpoint chooses with `--decode`. Frame F1 does not depend on the decoder; IoU, `%` and mF1S do.
+
 | deviation taken | why it is a bug, not a preference |
 |---|---|
 | 3 of 17 test clips dropped | no annotation at all — a free ~1.0 on every metric |
@@ -25,6 +27,12 @@ conda activate sas                                        # the 2026 model + sco
 python benchmark/predict_dgs_2026.py --split test
 python benchmark/score.py benchmark/predictions/*.json
 ```
+
+`predict_dgs_2026.py` decodes with the decoder named by `--decode`, else with the one kept in the checkpoint (a checkpoint of ours keeps the decoder of its training run), else with `b-honouring`. The shipped model, which is what runs without `--model`, keeps no decoder, since its `config.json` is upstream's: the script takes `b-ignoring` for it, the decoder it ships with. The prediction file names its decoder under `decode`.
+
+`score.py` scores the segments stored in a prediction file. With `--decode <name>` it scores the stored frame labels instead, decoded again with that [decoder](../metrics/README.md#decoders), so one file serves every decoder: `python benchmark/score.py experiments/predictions/05_dgs_w1-5-1_s42.json --decode i-runs-kept`. The file is not changed, and the row names the decoder. It is for a file of `predict_dgs_2026.py`, whose segments were decoded from its stored labels. A file whose `thresholds` are not empty is refused: `predict_dgs_2023.py` decodes its segments from the probabilities with thresholds and stores only the argmax as labels, so `--decode` must not be pointed at `benchmark/predictions/*.json`.
+
+`redecode.py` changes the decoder that a prediction file is stored with. Its docstring, which `python benchmark/redecode.py --help` prints, says what it does, when to use it and when not.
 
 Clips, filters and gold come from [`../datasets/public_dgs_corpus/load.py`](../datasets/public_dgs_corpus/load.py) for every model: `iter_clips` reads the TFDS build at 25fps, `iter_clips_native` the archived `.pose` originals at 50fps. Each model gets the one it was developed against. Predictions land in `predictions/*.json` as segments plus RLE'd frame labels.
 
