@@ -118,6 +118,14 @@ The 2026 shipped checkpoint is the reference, not a row we produced.
 | `01_basic_lr1e-5` | " | 0.464 | 0.748 | 0.471 | 1.264 | 0.234 | 0.525 | 0.902 | 0.812 | **0.981** | 0.148 |
 | `01_basic_lr3e-6` | " | 0.063 | 0.076 | 0.346 | 9.619 | 0.065 | 0.197 | 0.436 | 0.036 | 8.351 | 0.000 |
 | `01_basic_lr1e-6` | " | 0.038 | 0.047 | 0.351 | 3.000 | 0.053 | 0.199 | 0.436 | 0.043 | 10.217 | 0.000 |
+| *— class weights, B-honouring decoder —* | | | | | | | | | | | |
+| `03_dgs_scratch_s42` | defaults since 2026-09-15, inverse class weights | 0.522 | 0.695 | 0.591 | 1.240 | 0.451 | 0.517 | 0.823 | 0.814 | 4.067 | 0.109 |
+| `05_dgs_w1-5-1_s42` | as above, weights 1,5,1 | **0.594** | **0.813** | 0.523 | **0.859** | **0.559** | **0.581** | **0.908** | 0.488 | **0.511** | 0.350 |
+| `05_dgs_w1-20-1_s42` | as above, weights 1,20,1 | 0.529 | 0.714 | **0.611** | 1.228 | 0.492 | 0.567 | 0.890 | **0.818** | 1.502 | **0.352** |
+| `05_dgs_w2-80-1_s42` | as above, weights 2,80,1 | 0.436 | 0.612 | 0.573 | 1.328 | 0.387 | 0.545 | 0.835 | 0.798 | 3.698 | 0.123 |
+| *— recipes of earlier rows, no class weights, B-honouring decoder —* | | | | | | | | | | | |
+| `04_dgs_like_00_s42` | recipe of `00_2026_baseline` | **0.562** | **0.821** | **0.134** | **0.206** | **0.231** | 0.526 | **0.907** | 0.005 | 0.004 | 0.005 |
+| `04_dgs_noweights_nodrop_video_s42` | recipe of `01_basic_lr1e-3` | 0.523 | 0.807 | 0.035 | 0.055 | 0.081 | **0.538** | 0.902 | **0.037** | **0.035** | **0.032** |
 
 Bold marks the best within each group; `%` is best nearest **1**. Predictions live in `experiments/predictions/` (dev), kept apart from `benchmark/predictions/` (test) so the two can never be scored together.
 
@@ -138,6 +146,16 @@ Ten runs differing only in learning rate, spanning four decades. Every trick is 
 Within the plateau the metrics disagree, in a way worth keeping: **1e-3** leads IoU (hm 0.688) while **3e-4** emits close to the right number of segments at both levels (sign `%` 1.026, phrase `%` 1.036), which is what mF1S rewards and IoU cannot see. **5e-4** tops mean mF1S but over-segments phrases (`%` 1.280), so its lead rests on a metric its own `%` column undercuts.
 
 At 3e-6 and below the model never improved past its first validation — best epoch 1, phrase mF1S 0.000, and eight to ten times too many phrase segments. Those two rows bracket the sweep rather than measure a learning rate.
+
+### Class weights
+
+Four runs differing only in `--class-weights`, seed 42, with the defaults since 2026-09-15 and frame-uniform sampling. They are scored with the B-honouring decoder, so they do not compare with the rows above.
+
+**More weight on B gives more segments**, in these single-seed runs. Sign `%` goes from 0.86 with weight 5 to 1.33 with weight 80, and phrase `%` from 0.51 to 3.70. The inverse weights put B at 49 for signs and 269 for phrases, and give phrase `%` 4.07. Weight 5 has the best sign mF1S and the lowest IoU: it predicts too few segments.
+
+### Repeats of earlier rows
+
+`00_2026_baseline` and `01_basic_lr1e-3` trained without class weights and were scored with the B-ignoring decoder. The repeats train with their recipes (`--class-weights none`, `--sampling video`), with our fps augmentation with tempo stretch and no early stopping, and are scored like every run of ours, with the B-honouring decoder. **Without class weights that decoder finds few segments**: sign IoU is 0.134 and 0.035, and phrase mF1S is 0.005 and 0.032. So these rows do not compare with `00` and `01`. One seed each.
 
 ## Pretraining on YouTube
 
@@ -177,8 +195,11 @@ All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twi
 | 8 | `02_pretrain_youtube_frame_combo-2026.09.14` | as 5, plus `--tempo-stretch on` and `--frame_dropout 0.15` (full window), 40k steps | 17,629 | 0.542 | 0.865 | 1.226 | 0.364 | 0.522 | 0.851 | 1.129 | 0.328 | **0.321** | 0.578 | 0.873 | 0.207 |
 | 9 | `02_pretrain_youtube_frame_combo_hand_attn-2026.09.14` | as 8, plus `--body_part_dropout 0.1` and `--attn_dropout 0.1`, 40k steps | 15,225 | 0.532 | 0.854 | 1.245 | 0.371 | 0.516 | 0.851 | 1.171 | **0.341** | 0.281 | 0.544 | 0.810 | 0.175 |
 | 10 | `02_pretrain_youtube_padding_refactor-2026.09.15` | as 9, plus padding masked end to end ([`masked_model.py`](masked_model.py)), 40k steps | 14,824 | 0.533 | 0.843 | 1.141 | 0.373 | 0.516 | 0.829 | 1.090 | 0.338 | 0.298 | 0.588 | 0.942 | **0.246** |
+| 11 | `02_pretrain_youtube_repro-2026.11.23` | as 10, run again by gsantm on commit 11a152a | 20,433 | 0.538 | 0.864 | 1.213 | 0.374 | 0.519 | 0.856 | 1.170 | 0.336 | 0.311 | 0.573 | 0.969 | 0.237 |
 
 `step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run so far selected between 8k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
+
+Row 11 repeats row 10, most likely with the same seed (`--seed` defaults to 42), so the gap between them is run-to-run spread. Bold marks cover rows 1–10.
 
 **Defaults since 2026-09-15 are row 9's recipe**: `--fps-aug on`, `--tempo-stretch on`, frame dropout 0.15, body-part dropout 0.1 and attention dropout 0.1, in both `train.py` and `pretrain_youtube.slurm`. Rows 1–9 each spell out what they turned on, so they read the same as before; any run launched after this without those flags gets the recipe.
 
