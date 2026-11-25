@@ -57,7 +57,8 @@ def bio_to_segments(labels: Sequence[int], b: int = 1, i: int = 2) -> list[Segme
 
     This is the argmax case of their greedy decoder (`threshold_likeliest`, where
     `b > max(i, o)` is just "the argmax is B"), with `restart_on_b` as their
-    released `probs_to_segments` implements it:
+    released `probs_to_segments` implements it, for a clip in which some frame
+    is B (the last paragraph says what differs in a clip without B):
 
       * a segment opens on the first B;
       * a **run** of B frames is one boundary, not one per frame — their
@@ -99,8 +100,17 @@ def bio_to_segments(labels: Sequence[int], b: int = 1, i: int = 2) -> list[Segme
     DGS test sign          0.962  1.000
     ==================  ========  =====
 
-    Verified against the released v2023 `probs_to_segments` (with
-    `threshold_likeliest`) on 20,000 random label sequences: zero mismatches.
+    Compared with the released v2023 `probs_to_segments` (with
+    `threshold_likeliest`) on one-hot inputs: no mismatch on a sequence that
+    contains a B. On a sequence **without B** the two differ. Their function
+    first tests whether any frame has a B probability of 50% or more (before
+    `threshold_likeliest` is applied, so on the probability and not on the
+    argmax). When none has, it returns `io_probs_to_segments`, which makes a
+    segment of every run of I. This function has no such branch, and without a
+    B it returns no segment. On 20,000 random sequences of 2 to 40 labels,
+    19,317 contain a B and give zero mismatches; of the 683 without, the 593
+    that contain an I differ. `tests/test_decoders.py` fixes what this function
+    returns.
     """
     segments: list[Segment] = []
     start = None
@@ -116,7 +126,9 @@ def bio_to_segments(labels: Sequence[int], b: int = 1, i: int = 2) -> list[Segme
             # The frame right after the opening B never closes anything, not even
             # an O — it only marks that the opening run is over. That is what
             # `did_pass_start` does in their code, and it is why a lone B followed
-            # by O still yields a segment rather than nothing.
+            # by O still yields a segment rather than nothing. It is also why
+            # that O is inside the segment, and why `O B O I I O` is one segment
+            # from 1 to 4.
             if label != b:
                 passed_start = True
         elif label == b:
