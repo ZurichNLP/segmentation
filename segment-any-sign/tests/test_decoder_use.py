@@ -550,3 +550,147 @@ def test_the_shipped_model_stores_no_decoder():
     from sign_language_segmentation.bin import resolve_model_path
 
     assert stored_decode(resolve_model_path()) is None
+
+
+# --- eval_youtube.py and the plots: the same order -----------------------------------
+
+class PredictsByHand:
+    """Stands for a loaded model: it predicts `PREDICTED_IDS` at the phrase level."""
+
+    def __init__(self, stored_decode=None):
+        import argparse
+
+        self.stored_decode = stored_decode
+        self.hparams = argparse.Namespace(num_frames=1024, pose_dims=(50, 3))
+
+    def __call__(self, pose, timestamps=None):
+        return {"sign": one_hot_log_probs(PREDICTED_IDS),
+                "sentence": one_hot_log_probs(PREDICTED_IDS)}
+
+
+@pytest.fixture
+def youtube_clip(tmp_path, monkeypatch):
+    """One YouTube dev clip of nine frames at 50 fps whose gold phrase is frames 4 to 5."""
+    import types
+
+    import numpy as np
+    import pose_format
+    from datasets.youtube_sl25 import load as youtube
+
+    from sign_language_segmentation.utils import pose as upstream_pose
+
+    pose_path = tmp_path / "by_hand.pose"
+    pose_path.write_bytes(b"")
+    spec = {"id": "by_hand", "fps": 50.0, "pose_path": str(pose_path),
+            "sentences": [{"start_time": 0.07, "end_time": 0.11}]}
+    monkeypatch.setattr(youtube, "clip_specs", lambda split, **options: iter([spec]))
+    # the pose is not read: nine empty frames of 50 joints
+    empty = types.SimpleNamespace(body=types.SimpleNamespace(
+        data=np.ma.zeros((len(PREDICTED_IDS), 1, 50, 3))))
+    monkeypatch.setattr(pose_format.Pose, "read", staticmethod(lambda data: empty))
+    monkeypatch.setattr(upstream_pose, "preprocess_pose", lambda pose: pose)
+    return spec
+
+
+#: against the gold phrase 4-5: predicted segments, then IoU and `%`
+#:   b-honouring  4-5, 6-7        2/4   2
+#:   b-ignoring   1-2, 4-7        2/6   2
+#:   i-runs-kept  1-2, 4-5, 6-7   2/6   3
+YOUTUBE_SCORES = {"b-honouring": (2 / 4, 2.0), "b-ignoring": (2 / 6, 2.0),
+                  "i-runs-kept": (2 / 6, 3.0)}
+
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("stored, given, expected", [
+    (None, None, "b-honouring"),
+    ("i-runs-kept", None, "i-runs-kept"),
+    ("i-runs-kept", "upstream", "b-ignoring"),
+    (None, "i-runs-kept", "i-runs-kept"),
+])
+def test_eval_youtube_scores_with_the_decoder_of_the_order(stored, given, expected,
+                                                           youtube_clip, tmp_path, monkeypatch):
+    from benchmark import predict_dgs_2026
+    from experiments import eval_youtube
+
+    monkeypatch.setattr(predict_dgs_2026, "load_checkpoint",
+                        lambda path, device="cpu": PredictsByHand(stored))
+    result = eval_youtube.score(tmp_path / "best.ckpt", dev_filter=False, device="cpu",
+                                decode=given)
+    assert result["decode"] == expected
+    assert (result["iou"], result["percentage"]) == (
+        pytest.approx(YOUTUBE_SCORES[expected][0]), YOUTUBE_SCORES[expected][1])
+    assert result["clips"] == 1
+
+
+def in_seconds(segments, fps=50.0) -> list[float]:
+    """Start and end of each segment in seconds, one after the other."""
+    return [bound for segment in segments
+            for bound in (segment["start"] / fps, (segment["end"] + 1) / fps)]
+
+
+def bounds(drawn) -> list[float]:
+    """The spans of a plot record, `(start, end)` in seconds, in the same flat form."""
+    return [bound for span in drawn for bound in span]
+
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("stored, given, expected", [
+    (None, None, "b-honouring"),
+    ("i-runs-kept", None, "i-runs-kept"),
+    ("b-ignoring", "2023", "b-honouring"),
+])
+def test_plot_draws_the_segments_of_the_decoder_of_the_order(stored, given, expected,
+                                                             youtube_clip, tmp_path, monkeypatch):
+    from experiments import plot_segmentation
+
+    monkeypatch.setattr(plot_segmentation, "load_checkpoint",
+                        lambda path, device="cpu": PredictsByHand(stored))
+    records = plot_segmentation.collect(tmp_path / "best.ckpt", "youtube_25", clips=1,
+                                        device="cpu", quiet=True, decode=given)
+    assert [record["decode"] for record in records] == [expected]
+    assert bounds(records[0]["pred"]["phrase"]) == pytest.approx(
+        in_seconds(PREDICTED_SEGMENTS[expected]))
+    # the row beside it stays the b-ignoring one, whatever the decoder of the row "ours"
+    assert bounds(records[0]["pred_upstream"]["phrase"]) == pytest.approx(
+        in_seconds(PREDICTED_SEGMENTS["b-ignoring"]))
+
+
+@needs(*UPSTREAM)
+def test_plot_during_training_takes_the_decoder_of_the_model(youtube_clip):
+    """The callback gives `collect` the model that is training, not a checkpoint."""
+    from experiments import plot_segmentation
+    from metrics import get_decoder
+
+    model = PredictsByHand()
+    model.decoder = get_decoder("i-runs-kept")       # as ValidationMetricsModel has it
+    records = plot_segmentation.collect(model, "youtube_25", clips=1, device="cpu",
+                                        quiet=True)
+    assert records[0]["decode"] == "i-runs-kept"
+    assert bounds(records[0]["pred"]["phrase"]) == pytest.approx(
+        in_seconds(PREDICTED_SEGMENTS["i-runs-kept"]))
+
+
+def test_caption_of_the_row_ours_names_its_decoder():
+    from experiments.plot_segmentation import caption_of
+
+    for name in ("b-honouring", "b-ignoring", "i-runs-kept"):
+        assert name in caption_of("pred", [{"decode": name}])
+    # a cache of predictions written before the decoder was recorded: b-honouring then
+    assert "b-honouring" in caption_of("pred", [{}])
+    # the other rows do not depend on it
+    assert caption_of("gold", [{"decode": "b-ignoring"}]) == caption_of("gold", [{}])
+
+
+@pytest.mark.parametrize("script", ["train", "eval_youtube", "plot_segmentation"])
+def test_every_script_takes_the_earlier_names_too(script, monkeypatch, capsys):
+    """`--decode 2023` and `--decode upstream` are read wherever `--decode` exists."""
+    import importlib
+
+    module = importlib.import_module(f"experiments.{script}")
+    # a name that is no decoder stops the script, and the message lists what it takes
+    monkeypatch.setattr(sys, "argv", [f"{script}.py", "--run", "none", "--decode", "likeliest"])
+    with pytest.raises(SystemExit):
+        module.main()
+    message = capsys.readouterr().err
+    for name in ("b-honouring", "b-ignoring", "i-runs-kept", "2023", "upstream"):
+        assert name in message

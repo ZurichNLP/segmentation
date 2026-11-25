@@ -187,7 +187,7 @@ def main() -> None:
                       help="checkpoint selection metric (default mean_mf1s: the "
                            "mean of mF1S over the supervised levels; hm_iou is "
                            "upstream's, and needs both heads)")
-    ours.add_argument("--decode", default=None, choices=decoder_names(),
+    ours.add_argument("--decode", default=None, choices=decoder_names(aliases=True),
                       help="the decoder of the run: how predicted labels become "
                            "segments at validation, and so what the selection "
                            "metric is computed on. b-honouring (default) opens a "
@@ -1192,6 +1192,10 @@ def evaluate_best_checkpoint(run_dir: Path, phrase: str, split: str,
     `benchmark/predictions/` — separate directories so that
     `score.py benchmark/predictions/*.json` can never silently mix a dev score
     into the benchmark table.
+
+    No script is given a decoder here: the prediction, the YouTube scores and
+    the figures each read the decoder of the run from the checkpoint, where
+    training kept it.
     """
     import subprocess
 

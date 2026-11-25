@@ -38,13 +38,38 @@ ROWS = (
 
 CAPTION = {
     "gold": "gold — the reference annotation, split at every B.",
-    "pred": "ours — our model's argmax, decoded by Moryossef & Jiang (2023) "
-            "Algorithm 1, where a B closes the open segment and opens the next.",
     "ref_2023": "2023 — the published Moryossef & Jiang (2023) E4s model at its "
                 "tuned decoding thresholds, exactly as benchmarked.",
     "ref_2026": "2026 — the shipped model at its own defaults and its own "
                 "decoding, which ignores B, exactly as benchmarked.",
 }
+
+#: The caption of the row "ours", by the decoder that made its segments
+#: (`../metrics/decoders.py`): the row is only readable with it.
+PRED_CAPTION = {
+    "b-honouring": "ours — our model's argmax, decoded with b-honouring (Moryossef & "
+                   "Jiang 2023, Algorithm 1): a segment opens only on a B, and a B "
+                   "closes the open segment and opens the next.",
+    "b-ignoring": "ours — our model's argmax, decoded with b-ignoring: any run of "
+                  "frames that are not O is one segment, and B is not read.",
+    "i-runs-kept": "ours — our model's argmax, decoded with i-runs-kept: any run of "
+                   "frames that are not O, cut where a B closes one segment and "
+                   "opens the next.",
+}
+
+
+def caption_of(row: str, records: list[dict]) -> str:
+    """The caption of one row of the figure.
+
+    The row "ours" names the decoder of its segments, which each record carries
+    as `decode`. A cache of predictions written before the decoder was recorded
+    has no such key: all of those were decoded with b-honouring.
+    """
+    if row != "pred":
+        return CAPTION[row]
+    name = next((record["decode"] for record in records if record.get("decode")),
+                "b-honouring")
+    return PRED_CAPTION[name]
 
 FOOTER = ("White hairlines separate touching segments. One panel per clip, "
           "first two minutes only.")
@@ -72,33 +97,15 @@ def newest_checkpoint(run_dir: Path, which: str = "best") -> Path:
 from benchmark.predict_dgs_2026 import load_checkpoint  # noqa: E402,F401
 
 
-def _segments(bio, b_id: int, i_id: int, split_on_b: bool = True):
-    """Frame labels to spans.
+def _spans(decoder, labels) -> list[tuple[int, int]]:
+    """Frame labels in our ids to spans `(first frame, one past the last)`.
 
-    `split_on_b=True` is `metrics.bio_to_segments` — the 2023 paper's Algorithm 1
-    at argmax, where a B closes the open segment and opens a new one. That is the
-    decoder everything now uses.
-
-    `split_on_b=False` reproduces upstream's `likeliest_probs_to_segments`, which
-    never looks at B and merges any contiguous run of non-O. It is kept only so
-    the plot can show, side by side, what the old metrics were scoring.
+    `decoder` is one of `../metrics/decoders.py`. The figure draws two rows from
+    the same labels: "ours" with the decoder of the run, and beside it the
+    `b-ignoring` one, which never looks at B and merges any run that is not O,
+    so that the two can be compared at a glance.
     """
-    from metrics import bio_to_segments
-
-    if split_on_b:
-        return [(s["start"], s["end"] + 1) for s in bio_to_segments(bio, b_id, i_id)]
-
-    spans, start = [], None
-    for frame, value in enumerate(bio):
-        if value in (b_id, i_id):
-            if start is None:
-                start = frame
-        elif start is not None:
-            spans.append((start, frame))
-            start = None
-    if start is not None:
-        spans.append((start, len(bio)))
-    return spans
+    return [(s["start"], s["end"] + 1) for s in decoder.decode(labels)]
 
 
 def _to_seconds(spans, fps: float) -> list[tuple[float, float]]:
@@ -201,7 +208,7 @@ def plot_clips(records: list[dict], out_path: Path, title: str = "",
     figure.suptitle(title or f"{level} segmentation", fontsize=10)
     # the three rows are easy to confuse, and the whole point is the difference
     # between them, so spell it out on the figure itself
-    caption = "\n".join([CAPTION[row[0]] for row in rows] + [FOOTER])
+    caption = "\n".join([caption_of(row[0], records) for row in rows] + [FOOTER])
     figure.text(0.5, 0.004, caption, ha="center", va="bottom", fontsize=7,
                 color="#4a5568")
     figure.tight_layout(rect=(0, 0.055, 1, 1))
@@ -212,16 +219,23 @@ def plot_clips(records: list[dict], out_path: Path, title: str = "",
 
 
 def collect(model: "Path | object", dataset: str, clips: int, device: str,
-            phrase: str = "sentence", quiet: bool = False):
+            phrase: str = "sentence", quiet: bool = False, decode: str | None = None):
     """Run the model over `clips` validation videos and return plot records.
 
     `model` is either a checkpoint path, which is loaded, or a live module, which
     is used as it stands — the callback passes the model mid-training so a panel
     costs one forward per clip rather than a checkpoint reload.
+
+    The row "ours" is decoded in the order of every script: `decode`, which is
+    `--decode` of this run, then the decoder kept with the model, then
+    `b-honouring`. A checkpoint keeps it in its configuration (`load_checkpoint`
+    reads it), and a model that is training carries it as `decoder`. Each record
+    names the decoder under `decode`.
     """
     import torch
     from pose_format import Pose
 
+    from metrics import DECODERS, choose_decoder
     from sign_language_segmentation.metrics import bio_labels_to_segments
     from sign_language_segmentation.utils.bio import (BIO,
                                                       create_bio_from_times)
@@ -229,11 +243,18 @@ def collect(model: "Path | object", dataset: str, clips: int, device: str,
     if isinstance(model, (str, Path)):
         checkpoint = Path(model)
         model = load_checkpoint(checkpoint, device)
+        stored = model.stored_decode
         if not quiet:
             print(f"checkpoint {checkpoint}")
+    else:
+        stored = getattr(getattr(model, "decoder", None), "name", None)
+    decoder = choose_decoder(decode, stored)
+    # upstream's ids to ours, the labels every decoder takes; UNK becomes O
+    to_ours = {BIO["O"]: 0, BIO["B"]: 1, BIO["I"]: 2}
     velocity = tuple(getattr(model.hparams, "pose_dims", (50, 6)))[1] >= 6
     if not quiet:
         print(f"velocity   {'on' if velocity else 'off'}")
+        print(f"decoder    {decoder.name}")
 
     if dataset == "youtube_25":
         from datasets.youtube_sl25 import load as source
@@ -263,6 +284,8 @@ def collect(model: "Path | object", dataset: str, clips: int, device: str,
                   # kept for the detail view, which renders a skeleton when the
                   # clip has no video
                   "pose_path": str(spec["pose_path"]),
+                  # the decoder of the row "ours": the caption names it
+                  "decode": decoder.name,
                   "gold": {}, "pred": {}, "pred_upstream": {}}
         for upstream, ours in LEVELS.items():
             gold_ms = [{"start": s["start_time"] * 1000, "end": s["end_time"] * 1000}
@@ -273,18 +296,18 @@ def collect(model: "Path | object", dataset: str, clips: int, device: str,
             record["gold"][ours] = _to_seconds(
                 [(s["start"], s["end"] + 1) for s in bio_labels_to_segments(
                     torch.from_numpy(gold.astype("int64")))], fps)
-            record["pred"][ours] = _to_seconds(
-                _segments(bios[upstream], BIO["B"], BIO["I"]), fps)
-            # what the metrics scored before the decoder was fixed
+            labels = [to_ours.get(int(value), 0) for value in bios[upstream]]
+            record["pred"][ours] = _to_seconds(_spans(decoder, labels), fps)
+            # the same labels as the shipped model is decoded, for comparison
             record["pred_upstream"][ours] = _to_seconds(
-                _segments(bios[upstream], BIO["B"], BIO["I"], split_on_b=False), fps)
+                _spans(DECODERS["b-ignoring"], labels), fps)
         records.append(record)
         if quiet:
             continue
         print(f"  {record['id']:<20} {total:>7} frames  "
               f"gold {len(record['gold']['phrase']):>4}  "
               f"ours {len(record['pred']['phrase']):>5}  "
-              f"upstream decode {len(record['pred_upstream']['phrase']):>4}",
+              f"b-ignoring {len(record['pred_upstream']['phrase']):>4}",
               flush=True)
 
     if quiet or not records:
@@ -293,14 +316,22 @@ def collect(model: "Path | object", dataset: str, clips: int, device: str,
                         len(r["pred_upstream"]["phrase"])] for r in records])
     gold_n, ours, upstream = counts.sum(0)
     print(f"\n{len(records)} clips — phrase % (#pred/#gold), optimal 1:")
-    print(f"  ours (2023 Algorithm 1)        {ours / gold_n:.3f}")
-    print(f"  upstream decode (B ignored)    {upstream / gold_n:.3f}")
+    print(f"  ours ({decoder.name}){'':<{max(1, 24 - len(decoder.name))}}{ours / gold_n:.3f}")
+    print(f"  b-ignoring (B is not read)     {upstream / gold_n:.3f}")
     return records
 
 
 def main() -> None:
+    from metrics import decoder_names
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True, help="run directory name under dist/")
+    parser.add_argument("--decode", default=None, choices=decoder_names(aliases=True),
+                        help="the decoder of the row 'ours'. Not given: the decoder "
+                             "kept in the checkpoint, else b-honouring. '2023' and "
+                             "'upstream' are the earlier names of b-honouring and "
+                             "b-ignoring. With --reuse the cached segments are "
+                             "drawn as they were decoded")
     parser.add_argument("--datasets", default="youtube_25,dgs_corpus",
                         help="comma-separated validation datasets, one plot each")
     parser.add_argument("--clips", type=int, default=20,
@@ -349,7 +380,7 @@ def main() -> None:
         if records is None:
             checkpoint = newest_checkpoint(run_dir, args.which)
             records = collect(checkpoint, dataset, args.clips, args.device,
-                              phrase=args.phrase)
+                              phrase=args.phrase, decode=args.decode)
             cache.write_text(json.dumps(records))
 
         for spec in args.reference:
