@@ -261,15 +261,43 @@ def greedy_match(matrix: np.ndarray) -> list[float]:
     as Renz et al. do. This is one-to-one but not optimal — it maximises the
     single best pair at each step rather than the total — and is kept for
     comparability with their published numbers.
+
+    A tie goes to the earlier gold segment (row), then to the earlier predicted
+    one (column). Once no free pair overlaps, the free rows and columns are
+    paired in order, so the list ends with their zeros and has one value for
+    each gold or each predicted segment, whichever are fewer.
+
+    The pairs are sorted once, and a pair is taken when its row and its column
+    are both free; searching the matrix again after each pair took seconds for
+    a clip of 2,000 signs. Only the overlapping pairs need sorting. A matrix
+    with a negative or NaN entry, which no IoU is, has every pair sorted, NaN
+    first as `np.argmax` has it. `tests/test_segmentation.py` keeps the first
+    loop and checks that the list is the same, bit for bit.
     """
-    remaining = np.array(matrix, dtype=float, copy=True)
+    matrix = np.asarray(matrix, dtype=float)
+    if (matrix >= 0).all():
+        # IoUs: only the overlapping pairs need an order, every other entry is 0
+        rows, columns = np.nonzero(matrix > 0)
+    else:
+        rows, columns = (index.ravel() for index in np.indices(matrix.shape))
+    values = matrix[rows, columns]
+    # NaN first, then the largest value; a tie by row, then by column
+    order = np.lexsort((columns, rows, -values, ~np.isnan(values)))
+
+    row_free = np.ones(matrix.shape[0], dtype=bool)
+    column_free = np.ones(matrix.shape[1], dtype=bool)
     matched: list[float] = []
-    while remaining.size and min(remaining.shape) > 0:
-        row, column = np.unravel_index(np.argmax(remaining), remaining.shape)
-        matched.append(float(remaining[row, column]))
-        remaining = np.delete(remaining, row, axis=0)
-        remaining = np.delete(remaining, column, axis=1)
-    return matched
+    for row, column, value in zip(rows[order].tolist(), columns[order].tolist(),
+                                  values[order].tolist()):
+        if row_free[row] and column_free[column]:
+            row_free[row] = column_free[column] = False
+            matched.append(value)
+
+    # No free pair overlaps: the free rows and columns pair in order, and their
+    # entries (not a 0.0 written in their place) end the list.
+    rest = min(row_free.sum(), column_free.sum())
+    return matched + matrix[np.flatnonzero(row_free)[:rest],
+                            np.flatnonzero(column_free)[:rest]].tolist()
 
 
 def segment_counts(segments: Sequence[Segment], segments_gold: Sequence[Segment],

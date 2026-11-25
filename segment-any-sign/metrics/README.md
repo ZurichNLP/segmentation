@@ -35,6 +35,8 @@ Verified against the paper ([arXiv 2011.12986](https://arxiv.org/abs/2011.12986)
 
 **Copied** — *segment level* (frame labels become segments first, then matching and counting happen over segments); thresholds 0.40–0.75 step 0.05; *greedy* one-to-one matching, largest IoU first, dropping that row and column (not optimal — an optimal assignment would inflate our scores relative to theirs); strict `>` against the threshold; *micro* aggregation across the corpus.
 
+In the greedy matching a tie goes to the earlier gold segment, then to the earlier predicted one. `greedy_match` sorts the pairs once rather than searching the matrix again after each pair; [`tests/test_segmentation.py`](../tests/test_segmentation.py) keeps the first loop and checks that the list it returns is the same, bit for bit.
+
 **One deviation, for a real bug** — their union is the enclosing span (`max(end) - min(start)`) with the intersection never clamped, so disjoint segments get a *negative* IoU. We use `len_a + len_b - intersection`, clamped at zero. This cannot move mF1S: those pairs fail every threshold either way.
 
 Their **exclusive-end** convention is *not* a bug and is left alone — their segments end one past the last frame, so `end - start` is correct there. Ours are inclusive, hence `end - start + 1`.
