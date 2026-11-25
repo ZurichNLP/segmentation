@@ -931,10 +931,13 @@ def test_decoder_of_a_prediction_run(given, model_given, stored, expected):
     assert decoder_of_run(given, model_given=model_given, stored=stored).name == expected
 
 
-#: what a model "predicts" in the test below, in upstream ids (UNK=0, O=1, B=2, I=3):
+#: What a model "predicts" in the tests below, in upstream ids (UNK=0, O=1, B=2, I=3).
+#: Two frames are UNK, which a model can give and which every script turns
+#: into O before it decodes: so that step is run in each of them.
 #:   frame        0 1 2 3 4 5 6 7 8
-#:   both levels  O I I O B I B I O
-PREDICTED_IDS = [1, 3, 3, 1, 2, 3, 2, 3, 1]
+#:   upstream     U I I U B I B I O
+#:   in our ids   O I I O B I B I O
+PREDICTED_IDS = [0, 3, 3, 0, 2, 3, 2, 3, 1]
 PREDICTED_SEGMENTS = {
     "b-honouring": spans((4, 5), (6, 7)),
     "b-ignoring": spans((1, 2), (4, 7)),
