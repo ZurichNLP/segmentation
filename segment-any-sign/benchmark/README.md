@@ -26,6 +26,8 @@ python benchmark/predict_dgs_2026.py --split test
 python benchmark/score.py benchmark/predictions/*.json
 ```
 
+`score.py` scores the segments stored in a prediction file. With `--decode <name>` it scores the stored frame labels instead, decoded again with that [decoder](../metrics/README.md#decoders), so one file serves every decoder: `python benchmark/score.py benchmark/predictions/*.json --decode i-runs-kept`. The file is not changed, and the row names the decoder.
+
 Clips, filters and gold come from [`../datasets/public_dgs_corpus/load.py`](../datasets/public_dgs_corpus/load.py) for every model: `iter_clips` reads the TFDS build at 25fps, `iter_clips_native` the archived `.pose` originals at 50fps. Each model gets the one it was developed against. Predictions land in `predictions/*.json` as segments plus RLE'd frame labels.
 
 The two folders are keys of the paths file, `data.public_dgs_corpus.tfds` and `data.public_dgs_corpus.downloads`: see Locations in [`../README.md`](../README.md). The prediction scripts take no option for them; `python -m paths data.public_dgs_corpus.downloads` shows the folder in use.

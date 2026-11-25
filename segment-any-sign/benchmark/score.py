@@ -13,6 +13,14 @@ TensorFlow.
 
 By default only clips carrying gold annotation are scored. Pass `--all-clips` for
 the looser 17-clip set the 2023 paper used.
+
+A prediction file stores the segments its model was decoded into, and those are
+what is scored. `--decode NAME` scores the stored frame labels instead, decoded
+again with that decoder of [`../metrics/decoders.py`](../metrics/decoders.py), so
+one file serves every decoder. The file is not changed, and the row names the
+decoder. Frame F1 is the same either way: it never reads segments.
+
+    python benchmark/score.py benchmark/predictions/*.json --decode i-runs-kept
 """
 
 from __future__ import annotations
@@ -26,8 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
-from metrics import (aggregate, evaluate_level, frame_f1,  # noqa: E402
-                     frame_f1_micro, global_iou, segment_counts,
+from metrics import (aggregate, decoder_names, evaluate_level,  # noqa: E402
+                     frame_f1, frame_f1_micro, get_decoder, global_iou,
+                     segment_counts,
                      segment_percentage)  # evaluate_level is used by --per-clip
 
 LEVELS = ("sign", "phrase")
@@ -39,7 +48,21 @@ def unrle(runs) -> np.ndarray:
     return np.concatenate([np.full(count, value, dtype=np.int64) for value, count in runs])
 
 
-def score_clip(clip: dict, level: str) -> dict:
+def predicted_segments(clip: dict, level: str, decoder=None) -> list:
+    """The predicted segments of a clip at one level.
+
+    Without a decoder, the segments stored in the file. With one, the stored
+    frame labels decoded again: what `--decode` asks for.
+    """
+    if decoder is None:
+        return clip["pred"].get(level, [])
+    if "pred_bio" not in clip:
+        raise SystemExit(
+            f"clip {clip.get('id')} has no frame labels to decode; re-run the predict step")
+    return decoder.decode(unrle(clip["pred_bio"][level]))
+
+
+def score_clip(clip: dict, level: str, decoder=None) -> dict:
     """Metrics for one clip at one level, matching how the 2023 eval computed them.
 
     Frame metrics come from the stored per-frame labels — gold from `build_bio`,
@@ -51,8 +74,11 @@ def score_clip(clip: dict, level: str) -> dict:
     Prediction files must carry frame labels. Deriving them from the decoded
     segments instead would silently compute a different quantity, so that is an
     error rather than a fallback.
+
+    `decoder` replaces the stored segments by the stored labels decoded again
+    (`predicted_segments`). The frame metrics do not move with it.
     """
-    pred, gold = clip["pred"].get(level, []), clip["gold"].get(level, [])
+    pred, gold = predicted_segments(clip, level, decoder), clip["gold"].get(level, [])
     num_frames = clip["num_frames"]
 
     if "gold_bio" not in clip or "pred_bio" not in clip:
@@ -74,8 +100,12 @@ def score_clip(clip: dict, level: str) -> dict:
     return result
 
 
-def score_file(path: Path, annotated_only: bool = True) -> dict:
+def score_file(path: Path, annotated_only: bool = True, decoder=None) -> dict:
     """Score one prediction file, per level.
+
+    `decoder` is a decoder of `metrics.decoders`, or None for the segments stored
+    in the file. The row says which under `decode`: the name of the decoder, or
+    None.
 
     `annotated_only` (the default) drops clips with no gold at that level. Three
     of the 17 DGS test clips are the unannotated partner in a two-signer
@@ -98,10 +128,11 @@ def score_file(path: Path, annotated_only: bool = True) -> dict:
         if not any(clip["gold"].get(level) for clip in clips):
             results[level] = None
             continue
-        results[level] = aggregate([score_clip(clip, level) for clip in scored])
+        results[level] = aggregate([score_clip(clip, level, decoder) for clip in scored])
 
     return {
         "model": payload.get("model", path.stem),
+        "decode": decoder.name if decoder is not None else None,
         "dataset": payload.get("dataset", "?"),
         "split": payload.get("split", "?"),
         "thresholds": payload.get("thresholds", {}),
@@ -119,10 +150,15 @@ def model_label(row: dict) -> str:
     scores move with them, so a row is not interpretable without them. Written as
     `sign, phrase` in that order; a level the dataset does not annotate is
     omitted.
+
+    When the stored labels were decoded again (`--decode`), the name of that
+    decoder follows in brackets, e.g. `05_dgs_w1-5-1_s42 [i-runs-kept]`, so that
+    such a row is never read as the stored segments of the file.
     """
     pairs = [f"{p[0]:g}/{p[1]:g}" for level in LEVELS
              if row["levels"].get(level) and (p := row["thresholds"].get(level))]
-    return f"{row['model']} ({', '.join(pairs)})" if pairs else row["model"]
+    label = f"{row['model']} ({', '.join(pairs)})" if pairs else row["model"]
+    return f"{label} [{row['decode']}]" if row.get("decode") else label
 
 
 def format_table(rows: list[dict]) -> str:
@@ -173,25 +209,33 @@ def main() -> None:
                         help="also score clips with no gold at that level. Needed "
                              "to reproduce the 2023 paper, which included them; "
                              "the default drops them (14 of 17 DGS test clips)")
+    parser.add_argument("--decode", default=None, choices=decoder_names(aliases=True),
+                        help="decode the stored frame labels again with this "
+                             "decoder and score those segments, in place of the "
+                             "segments stored in the file. Not given: the stored "
+                             "segments. '2023' and 'upstream' are the earlier "
+                             "names of b-honouring and b-ignoring")
     parser.add_argument("--out", type=Path, default=None, help="write results as JSON")
     args = parser.parse_args()
 
-    rows = [score_file(path, annotated_only=not args.all_clips)
+    decoder = get_decoder(args.decode) if args.decode else None
+    rows = [score_file(path, annotated_only=not args.all_clips, decoder=decoder)
             for path in args.predictions]
     print(format_table(rows))
 
     if args.per_clip:
         for path in args.predictions:
             payload = json.loads(path.read_text())
-            print(f"\nper clip — {payload.get('model', path.stem)}")
+            print(f"\nper clip — {payload.get('model', path.stem)}"
+                  + (f" [{decoder.name}]" if decoder else ""))
             scored = []
             for clip in payload["clips"]:
                 if not clip["gold"].get("sign"):
                     continue
-                result = evaluate_level(clip["pred"].get("sign", []),
-                                        clip["gold"]["sign"], clip["num_frames"])
+                pred = predicted_segments(clip, "sign", decoder)
+                result = evaluate_level(pred, clip["gold"]["sign"], clip["num_frames"])
                 scored.append((result["mf1s"], clip["id"], result,
-                               len(clip["gold"]["sign"]), len(clip["pred"].get("sign", []))))
+                               len(clip["gold"]["sign"]), len(pred)))
             for mf1s_value, clip_id, result, n_gold, n_pred in sorted(scored):
                 print(f"  {clip_id:<22} gold {n_gold:>5} pred {n_pred:>5}  "
                       f"F1 {result['frame_f1']:.4f}  IoU {result['iou']:.4f}  "
