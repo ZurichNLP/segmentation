@@ -44,6 +44,14 @@ self-evidently throwaway; a dry run also deletes its own run directory.
                                   what the best checkpoint maximises. Default is
                                   the mean of sign and phrase mF1S; upstream used
                                   hm_iou.
+    --decode {b-honouring,b-ignoring,i-runs-kept}
+                                  the decoder of the run (../metrics/decoders.py):
+                                  how predicted labels become segments at
+                                  validation, so it decides the selection metric
+                                  and the checkpoint that is kept. Default
+                                  b-honouring. Its name is kept in every
+                                  checkpoint of the run, and the scripts that run
+                                  when training ends read it there.
 
 `dist` is a link, made here, to the folder `outputs.dist` of the paths file
 (`../paths.py`): a run folder is `dist/<run>` relative to `segment-any-sign/`,
@@ -102,6 +110,8 @@ import paths
 
 
 def main() -> None:
+    from metrics import choose_decoder, decoder_names
+
     # Take our flags out of argv first: upstream's args.py calls parse_args() at
     # import time and rejects anything it does not know.
     ours = argparse.ArgumentParser(add_help=False)
@@ -177,6 +187,15 @@ def main() -> None:
                       help="checkpoint selection metric (default mean_mf1s: the "
                            "mean of mF1S over the supervised levels; hm_iou is "
                            "upstream's, and needs both heads)")
+    ours.add_argument("--decode", default=None, choices=decoder_names(),
+                      help="the decoder of the run: how predicted labels become "
+                           "segments at validation, and so what the selection "
+                           "metric is computed on. b-honouring (default) opens a "
+                           "segment only on a B; b-ignoring makes one segment of "
+                           "any run of labels that are not O; i-runs-kept cuts "
+                           "those runs at a B. The name is kept in the "
+                           "checkpoint, where predict_dgs_2026.py, "
+                           "eval_youtube.py and plot_segmentation.py read it")
     ours.add_argument("--num-workers", type=int, default=None,
                       help="dataloader workers (upstream hardcodes 8). Default "
                            "is min(32, CPUs allocated to this job): reading is "
@@ -497,6 +516,15 @@ def main() -> None:
             source=mine.weights_from)
     args.class_weighting = weighting
     args.class_weights_from = mine.weights_from or args.datasets.split(",")[0]
+
+    # The decoder of the run: --decode, else the default, b-honouring. The person
+    # who launches the run chooses it; nothing here derives it from the recipe.
+    # The model decodes with it at validation and keeps its name in every
+    # checkpoint (`ValidationMetricsModel`), and `args.decode` puts it into
+    # run_config.json and W&B.
+    decoder = choose_decoder(mine.decode)
+    ValidationMetricsModel.decoder = decoder
+    args.decode = decoder.name
 
     report_effective_config(args, mine, _dated_run_name(args.run_name))
 
@@ -899,6 +927,8 @@ def report_effective_config(args, mine, run_name: str) -> None:
           + (f", measured on {args.class_weights_from}"
              if args.class_weights_from != args.datasets.split(",")[0] else "")
           + f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
+          + f"\n  decoder     {args.decode}  (labels to segments, at validation "
+            "and in the checkpoint)"
           + (f"\n  LIMIT       {args.limit} clips per split — NOT a reportable run"
              if args.limit else ""))
 
@@ -1269,6 +1299,8 @@ def dry_run(args) -> None:
     loss = model.step(batch, name="dry_run")
     print(f"levels         {ValidationMetricsModel.levels}"
           f"  class weights {'set' if ValidationMetricsModel.class_weights else 'none'}")
+    print(f"decoder        {model.decoder.name}"
+          f"  (kept in the checkpoint as decode={model.hparams['decode']})")
     print(f"loss           {float(loss):.4f}")
     print("\ndry run OK — data, model and loss all wire up")
 

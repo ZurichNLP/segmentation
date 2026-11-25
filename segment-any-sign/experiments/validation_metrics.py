@@ -20,6 +20,11 @@ worth stating: our checkpoints are no longer selected the way the published 2026
 model was, and the mean is dominated by the sign level, since phrase mF1S runs
 far lower. `--select-on hm_iou` restores upstream's choice.
 
+**IoU, `%` and mF1S are computed on the segments of the decoder of the run**
+([`../metrics/decoders.py`](../metrics/decoders.py)), which `train.py` sets from
+`--decode`; frame F1 does not depend on it. So the decoder decides the selection
+metric too. Its name is kept in every checkpoint, as the hyperparameter `decode`.
+
 **Train and validation are not measured on the same thing**, and the overlay
 should be read with that in mind: training batches are random 1024-frame windows
 with augmentation applied, while validation runs whole videos with none. Expect
@@ -52,7 +57,7 @@ from sign_language_segmentation.metrics import bio_labels_to_segments  # noqa: E
 from sign_language_segmentation.model.model import PoseTaggingModel  # noqa: E402
 from sign_language_segmentation.utils.bio import BIO  # noqa: E402
 
-from metrics import (bio_to_segments, frame_f1, frame_f1_micro,  # noqa: E402
+from metrics import (choose_decoder, frame_f1, frame_f1_micro,  # noqa: E402
                      global_iou, mf1s_from_counts, segment_counts,
                      segment_percentage)
 
@@ -105,6 +110,14 @@ class ValidationMetricsModel(PoseTaggingModel):
     #: gold wastes a decode per clip.
     levels = ("sign", "sentence")
 
+    #: The decoder of the run (`metrics/decoders.py`): it turns the predicted
+    #: labels into the segments that IoU, `%` and mF1S are computed on, so it
+    #: decides the selection metric and with it the checkpoint that is kept.
+    #: `train.py` sets it from `--decode` before the model is constructed; left
+    #: alone it is the default, `b-honouring`. Its name is kept in the
+    #: checkpoint: see `__init__`.
+    decoder = choose_decoder(None)
+
     #: gradient accumulation, so the LR schedule can be sized in *optimiser*
     #: steps. Upstream is handed batches per epoch and OneCycleLR steps once per
     #: optimiser step, so with accumulation the schedule would be N times too
@@ -116,6 +129,14 @@ class ValidationMetricsModel(PoseTaggingModel):
         # same parameters and buffers, so checkpoints stay interchangeable with
         # plain PoseTaggingModel; only training statistics on padded batches differ
         use_masked_batchnorm(self.frame_cnn)
+        # The decoder belongs to the model: the checkpoint was selected with it.
+        # Upstream's `__init__` has saved its own arguments as hyperparameters,
+        # which Lightning writes into every checkpoint under `hyper_parameters`;
+        # this adds one key to them, `decode`. Plain `PoseTaggingModel` still
+        # loads such a checkpoint, because its `**kwargs` takes the key, but it
+        # does not keep it: `load_checkpoint` of benchmark/predict_dgs_2026.py
+        # reads it from the file.
+        self.save_hyperparameters({"decode": self.decoder.name})
         if self.accumulate > 1:
             import math
             self.steps_per_epoch = max(1, math.ceil(self.steps_per_epoch
@@ -185,14 +206,14 @@ class ValidationMetricsModel(PoseTaggingModel):
                     # bf16, which numpy cannot convert (upstream's own
                     # likeliest_probs_to_segments trips on this too)
                     probs = log_probs[upstream_name][i][:num_frames].cpu().float()
-                    # not upstream's likeliest_probs_to_segments: that one never
-                    # looks at B, so back-to-back segments can only ever be
-                    # counted as one. bio_to_segments is the 2023 paper's
-                    # Algorithm 1 at argmax, and restores a reachable % of 1.
-                    pred_segments = bio_to_segments(
-                        probs.argmax(dim=1).numpy(), b=BIO["B"], i=BIO["I"])
                     gold_bio = _remap(gold[:num_frames].cpu()).numpy()
                     pred_bio = _remap(probs.argmax(dim=1)).numpy()
+                    # The decoder of the run, on the labels in our ids (UNK
+                    # became O, which every decoder treats alike). Which one
+                    # matters: `b-ignoring` never looks at B, so two segments
+                    # that touch are one; `b-honouring` needs a B to open a
+                    # segment, so a model that predicts few B gets few segments.
+                    pred_segments = self.decoder.decode(pred_bio)
 
                     bucket = collected[our]
                     # gold x pred counts over O/B/I, summed across clips. Macro and

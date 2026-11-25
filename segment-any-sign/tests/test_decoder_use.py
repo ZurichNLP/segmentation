@@ -12,6 +12,9 @@ import sys
 
 import pytest
 
+# the model is built on the upstream package: see test_locations.py
+from tests.test_locations import UPSTREAM, needs
+
 # --- a prediction file written by hand ------------------------------------------
 
 O, B, I = 0, 1, 2
@@ -163,3 +166,116 @@ def test_out_file_records_the_decoder(prediction_file, tmp_path, monkeypatch, ca
     out = tmp_path / "scores.json"
     run_score(monkeypatch, capsys, prediction_file, "--decode", "i-runs-kept", "--out", out)
     assert json.loads(out.read_text())[0]["decode"] == "i-runs-kept"
+
+
+# --- training: the decoder of a run, and where it is kept -----------------------
+
+#: a model small enough to build in a test; the arguments are upstream's
+SMALL = {"pose_dims": (50, 3), "hidden_dim": 64, "encoder_depth": 1,
+         "steps_per_epoch": 5, "max_epochs": 2, "attn_nhead": 4}
+
+
+def checkpoint_of(model, path):
+    """Write `model` to `path` as Lightning writes a checkpoint during training."""
+    import pytorch_lightning as pl
+
+    trainer = pl.Trainer(logger=False, enable_checkpointing=False, accelerator="cpu",
+                         enable_progress_bar=False, enable_model_summary=False,
+                         max_epochs=1)
+    trainer.strategy.connect(model)
+    trainer.save_checkpoint(path)
+    return path
+
+
+@needs(*UPSTREAM)
+def test_model_decodes_with_b_honouring_when_nothing_sets_its_decoder():
+    from experiments.validation_metrics import ValidationMetricsModel
+
+    assert ValidationMetricsModel.decoder.name == "b-honouring"
+    assert ValidationMetricsModel(**SMALL).hparams["decode"] == "b-honouring"
+
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("name", ["b-honouring", "b-ignoring", "i-runs-kept"])
+def test_checkpoint_keeps_the_name_of_the_decoder_of_the_run(name, tmp_path, monkeypatch):
+    import torch
+    from experiments.validation_metrics import ValidationMetricsModel
+    from metrics import get_decoder
+
+    from sign_language_segmentation.model.model import PoseTaggingModel
+
+    monkeypatch.setattr(ValidationMetricsModel, "decoder", get_decoder(name))
+    path = checkpoint_of(ValidationMetricsModel(**SMALL), tmp_path / "best.ckpt")
+
+    stored = torch.load(path, map_location="cpu", weights_only=False)["hyper_parameters"]
+    assert stored["decode"] == name
+    # only the decoder is added to what upstream's model keeps
+    assert set(stored) == set(PoseTaggingModel(**SMALL).hparams) | {"decode"}
+
+
+@needs(*UPSTREAM)
+def test_upstream_class_still_loads_a_checkpoint_that_keeps_a_decoder(tmp_path, monkeypatch):
+    import torch
+    from experiments.validation_metrics import ValidationMetricsModel
+    from metrics import get_decoder
+
+    from sign_language_segmentation.model.model import PoseTaggingModel
+
+    monkeypatch.setattr(ValidationMetricsModel, "decoder", get_decoder("b-ignoring"))
+    model = ValidationMetricsModel(**SMALL)
+    path = checkpoint_of(model, tmp_path / "best.ckpt")
+
+    loaded = PoseTaggingModel.load_from_checkpoint(path, map_location="cpu")
+    # the other hyperparameters come back, and so do the weights
+    assert loaded.hparams["hidden_dim"] == 64
+    assert tuple(loaded.hparams["pose_dims"]) == (50, 3)
+    for key, value in model.state_dict().items():
+        assert torch.equal(loaded.state_dict()[key], value), key
+
+
+def one_hot_log_probs(upstream_ids):
+    import torch
+
+    log_probs = torch.full((1, len(upstream_ids), 4), -20.0)
+    log_probs[0, torch.arange(len(upstream_ids)), torch.tensor(upstream_ids)] = 0.0
+    return log_probs
+
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("name, iou, percentage", [("b-honouring", 0.0, 0.0),
+                                                   ("b-ignoring", 1.0, 1.0),
+                                                   ("i-runs-kept", 1.0, 1.0)])
+def test_validation_scores_the_segments_of_the_decoder_of_the_run(name, iou, percentage,
+                                                                  monkeypatch):
+    """Gold `O B I I O`, predicted `O I I I O`: the B is missing.
+
+    With `b-honouring` there is no segment, so IoU and `%` are 0. The other two
+    decoders make the run of I a segment, which is the gold one.
+    """
+    import torch
+    from experiments.validation_metrics import ValidationMetricsModel, _empty
+    from metrics import get_decoder
+
+    monkeypatch.setattr(ValidationMetricsModel, "decoder", get_decoder(name))
+    model = ValidationMetricsModel(**SMALL)
+    gold = torch.tensor([[1, 2, 3, 3, 1]])           # upstream ids: UNK=0, O=1, B=2, I=3
+    batch = {"pose": torch.zeros(1, 5, 50, 3), "bio": {"sign": gold, "sentence": gold}}
+    predicted = one_hot_log_probs([1, 3, 3, 3, 1])
+
+    collected = _empty()
+    model._accumulate(batch, collected, log_probs={"sign": predicted, "sentence": predicted})
+    for level in ("sign", "phrase"):
+        assert collected[level]["iou"] == [iou]
+        assert collected[level]["percentage"] == [percentage]
+        # the frame metrics do not see the decoder
+        assert collected[level]["frame_f1_micro"] == [pytest.approx(4 / 5)]
+
+
+def test_train_refuses_a_decode_that_is_not_a_decoder(monkeypatch, capsys):
+    from experiments import train
+
+    monkeypatch.setattr(sys, "argv", ["train.py", "--decode", "likeliest"])
+    with pytest.raises(SystemExit) as stop:
+        train.main()
+    assert stop.value.code == 2
+    assert "b-honouring" in capsys.readouterr().err
