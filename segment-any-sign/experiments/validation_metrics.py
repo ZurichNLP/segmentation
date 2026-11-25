@@ -35,17 +35,18 @@ Cost of the forward passes: none at validation. Upstream runs two forward passes
 per validation batch and ours would be a third, so instead the forward is computed
 once and cached for all three — which makes validation one forward pass *cheaper*
 than it was before these metrics existed. Training pays one extra forward every
-`metrics_every_n_steps` steps (9, about once per epoch at batch 64). Scoring is
-not free: the matching behind mF1S is the expensive part of a validation, and it
-is paid for each decoder (see the paragraph on the other decoders below).
+`metrics_every_n_steps` steps (9, about once per epoch at batch 64). Scoring pays
+frame F1 once, and IoU, `%` and mF1S once for each decoder (see the paragraph on
+the other decoders below). Measured in November 2026 on an Apple M3 Max laptop,
+on the labels of the 12 DGS validation clips in
+`experiments/predictions/05_dgs_w1-5-1_s42.json` (18 clip-levels with gold):
+0.10 s for frame F1, and 0.11 to 0.12 s for each decoder.
 
 **The other decoders are scored at validation too**: IoU, `%` and mF1S of each
 decoder that is not the decoder of the run, logged for each validation set under
 `decoders/`, with the name of the decoder at the end. They are for reading, and
-nothing selects on them. Decoding costs next to nothing, but the matching behind
-mF1S is paid once more for each decoder: on DGS validation that was 60 to 90 s
-more for each validation, measured on the labels of two runs of November 2026.
-Train batches score the decoder of the run only.
+nothing selects on them. Each costs its own IoU, `%` and mF1S, the 0.11 to 0.12 s
+for each decoder measured above. Train batches score the decoder of the run only.
 
 **Padding is masked** ([`masked_model.py`](masked_model.py)): every forward here
 passes the batch's `lengths`, and the model's BatchNorm is the masked one, so a
@@ -196,8 +197,8 @@ class ValidationMetricsModel(PoseTaggingModel):
 
         With `others`, the segment metrics of the decoders that are not the
         decoder of the run are collected too, under `others` of each level. Only
-        validation asks for it: the matching behind mF1S is the expensive part
-        of scoring, and it is paid once more for each decoder.
+        validation asks for it: IoU, `%` and mF1S are paid once more for each
+        decoder (timed in the module docstring).
         """
         with torch.no_grad():
             if log_probs is None:
