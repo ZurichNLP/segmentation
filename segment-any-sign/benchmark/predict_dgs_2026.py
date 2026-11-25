@@ -20,14 +20,25 @@ annotations the 2023 run uses. Everything below that is the 2026 model's own:
     it does select the label builder, so it is honoured here.
   * **Decoding** is argmax, as the 2026 README requires — it is explicit that
     threshold decoding was tried and rejected, so unlike the 2023 row this one
-    has no `b/o` to report. How the argmax labels become segments is
-    `--decode`. The default `2023` uses `metrics.bio_to_segments`, the 2023
-    paper's Algorithm 1: a B closes the open segment and opens the next.
-    `--decode upstream` instead calls `likeliest_probs_to_segments`, which is
-    what this model ships with — it never inspects B and merges any run of
-    non-O, so two touching segments can only be counted as one while the gold
-    decoder splits them, capping phrase `%` at 0.25 on DGS test however good the
-    model is. Use it only to reproduce the shipped model on its own terms.
+    has no `b/o` to report. How the argmax labels become segments is the
+    decoder, one of [`../metrics/decoders.py`](../metrics/decoders.py):
+    `b-honouring` opens a segment only on a B (`metrics.bio_to_segments`, the
+    2023 code at argmax: a B closes the open segment and opens the next);
+    `b-ignoring` never inspects B and merges any run of non-O (the rule of
+    upstream's `likeliest_probs_to_segments`, which the shipped model is decoded
+    with), so two touching segments can only be counted as one while the gold
+    decoder splits them; `i-runs-kept` cuts those runs at a B. `2023` and
+    `upstream` are the earlier names of the first two and are still accepted.
+
+    Which decoder is used follows one order, the same in every script: the
+    value of `--decode` in this run, then the decoder kept with the model, then
+    `b-honouring`. A checkpoint of ours keeps the decoder of its training run
+    as the hyperparameter `decode` (`experiments/validation_metrics.py`); one
+    written before that keeps none. The shipped model keeps none either, since
+    its `config.json` is upstream's: without `--model` it is decoded with
+    `b-ignoring`, the decoder it ships with, unless `--decode` says otherwise.
+    Which decoder a row is *reported* with is a rule of README.md, and the
+    person who runs this applies it with `--decode`: no code does.
   * **Chunking** is upstream's: the whole clip goes to `PoseTaggingModel`,
     whose CNN runs full length and whose transformer then cuts it into
     *non-overlapping* `num_frames` chunks, the last one padded. Attention cannot
@@ -79,12 +90,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from datasets.public_dgs_corpus import load as dgs_data  # noqa: E402
-from metrics import bio_to_segments  # noqa: E402
+from metrics import choose_decoder, decoder_names  # noqa: E402
 
 # upstream 2026 ids -> ours. UNK has no counterpart; it only appears as batch
 # padding, which cannot happen at batch size 1.
 BIO_2026_TO_OURS = {1: 0, 2: 1, 3: 2}
-BIO_2026 = {"UNK": 0, "O": 1, "B": 2, "I": 3}
 
 LEVELS = {"sign": "sign", "sentence": "phrase"}  # their name -> ours
 
@@ -94,6 +104,49 @@ LEVELS = {"sign": "sign", "sentence": "phrase"}  # their name -> ours
 #: plain `PoseTaggingModel` has never heard of. Training-only either way: the
 #: weight belongs to the loss, not to the trained model.
 TRAINING_ONLY_KEYS = ("sign_loss_fn.weight", "phrase_loss_fn.weight")
+
+
+#: The decoder of the shipped 2026 model: the rule of upstream's
+#: `likeliest_probs_to_segments`. Its `config.json` is upstream's file and keeps
+#: no decoder, so it is said here.
+SHIPPED_DECODE = "b-ignoring"
+
+
+def stored_decode(model_path: str | Path) -> str | None:
+    """The name of the decoder kept in the configuration of a model, or None.
+
+    A checkpoint keeps its configuration under `hyper_parameters`, and a
+    safetensors model in `config.json` beside `model.safetensors`. Our training
+    adds the key `decode` to the first (`experiments/validation_metrics.py`),
+    and upstream's export copies it into the second. The file is read, not the
+    loaded model: upstream's class takes the key and does not keep it.
+
+    None when the configuration has no such key: every checkpoint written
+    before the decoder was kept, and the shipped model.
+    """
+    import torch
+
+    path = Path(model_path)
+    # the same choice of file as upstream's loader makes for this path
+    if path.suffix == ".safetensors" or (path / "model.safetensors").exists():
+        config = (path.parent if path.suffix == ".safetensors" else path) / "config.json"
+        return json.loads(config.read_text()).get("decode") if config.exists() else None
+    checkpoint = path if path.suffix == ".ckpt" else path / "best.ckpt"
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    return state.get("hyper_parameters", {}).get("decode")
+
+
+def decoder_of_run(given: str | None, model_given: bool, stored: str | None):
+    """The decoder of a prediction run, in the order every script follows.
+
+    `given` is `--decode`, `stored` the name kept with the model
+    (`stored_decode`), and then comes the default (`metrics.choose_decoder`).
+    The shipped model, which is what runs when no `--model` is given, keeps no
+    decoder in its configuration and stands for `SHIPPED_DECODE`.
+    """
+    if stored is None and not model_given:
+        stored = SHIPPED_DECODE
+    return choose_decoder(given, stored)
 
 
 def load_checkpoint(model_path: str, device: str = "cpu"):
@@ -107,6 +160,10 @@ def load_checkpoint(model_path: str, device: str = "cpu"):
 
     Every model comes back with padding masked (`enable_masking`), whichever
     branch loaded it, so no evaluation path can score an unmasked model.
+
+    It also comes back with `stored_decode`, the name of the decoder kept in its
+    configuration, or None when it keeps none (`stored_decode` above). That is
+    the second place a script looks for its decoder, after its own `--decode`.
     """
     import torch
 
@@ -117,14 +174,20 @@ def load_checkpoint(model_path: str, device: str = "cpu"):
 
     path = Path(model_path)
     if path.suffix != ".ckpt":
-        return enable_masking(_load_model_uncached(model_dir=str(path), device=device))
+        model = enable_masking(_load_model_uncached(model_dir=str(path), device=device))
+        model.stored_decode = stored_decode(path)
+        return model
 
     state = torch.load(path, map_location=device, weights_only=False)
+    # read here, from the file: the loaded model does not keep the key
+    stored = state.get("hyper_parameters", {}).get("decode")
     dropped = [key for key in TRAINING_ONLY_KEYS if key in state["state_dict"]]
     for key in dropped:
         state["state_dict"].pop(key)
     if not dropped:
-        return enable_masking(_load_model_uncached(model_dir=str(path), device=device))
+        model = enable_masking(_load_model_uncached(model_dir=str(path), device=device))
+        model.stored_decode = stored
+        return model
 
     # load_from_checkpoint only takes a path, so the trimmed state goes via a
     # sibling file that is removed whether or not the load succeeds
@@ -136,7 +199,9 @@ def load_checkpoint(model_path: str, device: str = "cpu"):
     finally:
         patched.unlink(missing_ok=True)
     print(f"dropped training-only keys: {', '.join(dropped)}")
-    return enable_masking(model.to(device).eval())
+    model = enable_masking(model.to(device).eval())
+    model.stored_decode = stored
+    return model
 
 
 def rle(values) -> list[list[int]]:
@@ -191,29 +256,35 @@ def main() -> None:
                         help="model name for the results table; set it when "
                              "scoring a retrained checkpoint so the row is not "
                              "confused with the shipped one")
-    parser.add_argument("--decode", default=None, choices=["2023", "upstream"],
-                        help="'2023' honours B (the paper's Algorithm 1 at "
-                             "argmax); 'upstream' is the shipped "
-                             "likeliest_probs_to_segments, which ignores it. "
-                             "Defaults to 'upstream' for the shipped 2026 "
-                             "checkpoint and '2023' for one of ours")
+    parser.add_argument("--decode", default=None, choices=decoder_names(aliases=True),
+                        help="how the argmax labels become segments: b-honouring "
+                             "opens a segment only on a B, b-ignoring makes one "
+                             "segment of any run of labels that are not O, "
+                             "i-runs-kept cuts those runs at a B. Not given: the "
+                             "decoder kept with the model (a checkpoint of ours "
+                             "keeps the one of its training run; the shipped "
+                             "model stands for b-ignoring), else b-honouring. "
+                             "'2023' and 'upstream' are the earlier names of "
+                             "b-honouring and b-ignoring")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
     import torch
     from sign_language_segmentation.bin import resolve_model_path
-    from sign_language_segmentation.metrics import (bio_labels_to_segments,
-                                                    likeliest_probs_to_segments)
+    from sign_language_segmentation.metrics import bio_labels_to_segments
     from sign_language_segmentation.utils.bio import create_bio_from_times
 
     model_path = args.model or resolve_model_path()
-    # The shipped model is always benchmarked on its own terms, decoder
-    # included: that is the model as published. Our own checkpoints are decoded
-    # the 2023 way, since a decoder that ignores B cannot separate two touching
-    # segments and caps phrase % at 0.25 on this split.
-    if args.decode is None:
-        args.decode = "upstream" if args.model is None else "2023"
     model = load_checkpoint(model_path, device=args.device)
+    # One order in every script: --decode of this run, then the decoder kept
+    # with the model, then the default. The shipped model is benchmarked on its
+    # own terms, decoder included: that is the model as published.
+    decoder = decoder_of_run(args.decode, model_given=args.model is not None,
+                             stored=model.stored_decode)
+    decoder_from = ("--decode" if args.decode
+                    else "kept with the model" if model.stored_decode
+                    else "the decoder of the shipped model" if args.model is None
+                    else "the default: none given, none kept with the model")
     num_frames = getattr(model.hparams, "num_frames", None)
     # (joints, dims); dims is 6 with velocity appended, 3 without
     pose_dims = tuple(getattr(model.hparams, "pose_dims", (50, 6)))
@@ -226,9 +297,7 @@ def main() -> None:
     native = args.source == "native"
     print(f"model        {model_path}")
     print(f"chunk size   {num_frames} frames")
-    print(f"decoding     argmax, segments via "
-          + ("likeliest_probs_to_segments, B ignored (shipped behaviour)"
-             if args.decode == "upstream" else "bio_to_segments, B honoured"))
+    print(f"decoding     argmax, segments via {decoder.name}  ({decoder_from})")
     print(f"source       {args.source} "
           f"({'50fps originals' if native else f'{args.fps}fps TFDS build'})")
     print(f"phrase gold  {args.phrase}")
@@ -264,14 +333,13 @@ def main() -> None:
             gold_bio = create_bio_from_times(spans_ms, frame_times_ms)
             probs = log_probs[their_name][0].cpu()
 
+            # the argmax labels in our ids: what is stored, and what is decoded
+            pred_bio = [BIO_2026_TO_OURS.get(int(v), 0) for v in probs.numpy().argmax(axis=1)]
+
             record["gold"][our_name] = bio_labels_to_segments(torch.from_numpy(gold_bio.astype(np.int64)))
-            record["pred"][our_name] = (
-                likeliest_probs_to_segments(probs) if args.decode == "upstream"
-                else bio_to_segments(probs.numpy().argmax(axis=1),
-                                     b=BIO_2026["B"], i=BIO_2026["I"]))
+            record["pred"][our_name] = decoder.decode(pred_bio)
             record["gold_bio"][our_name] = rle([BIO_2026_TO_OURS.get(int(v), 0) for v in gold_bio])
-            record["pred_bio"][our_name] = rle(
-                [BIO_2026_TO_OURS.get(int(v), 0) for v in probs.numpy().argmax(axis=1)])
+            record["pred_bio"][our_name] = rle(pred_bio)
 
         clips.append(record)
         print(f"  {record['id']:<24} {total_frames:>7} frames  "
@@ -286,7 +354,8 @@ def main() -> None:
         "thresholds": {},
         "source": args.source,
         "chunking": "padded last chunk, masked",
-        "decode": args.decode,
+        # the decoder of the stored segments, by its name in metrics/decoders.py
+        "decode": decoder.name,
         "velocity": velocity,
         "pose_dims": list(pose_dims),
         "phrase_gold": args.phrase,

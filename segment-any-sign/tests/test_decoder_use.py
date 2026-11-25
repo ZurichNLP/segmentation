@@ -404,3 +404,149 @@ def test_warning_for_a_run_without_class_weights_that_decodes_with_b_honouring()
     assert warning.startswith("warning: ") and "\n" not in warning
     assert "without class weights" in warning and "b-honouring" in warning
     assert "--decode b-ignoring" in warning
+
+
+# --- reading the decoder back from a model -------------------------------------------
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("name", ["b-ignoring", "i-runs-kept"])
+def test_load_checkpoint_gives_the_decoder_that_the_checkpoint_keeps(name, tmp_path,
+                                                                     monkeypatch):
+    from benchmark.predict_dgs_2026 import load_checkpoint
+    from experiments.validation_metrics import ValidationMetricsModel
+    from metrics import get_decoder
+
+    monkeypatch.setattr(ValidationMetricsModel, "decoder", get_decoder(name))
+    path = checkpoint_of(ValidationMetricsModel(**SMALL), tmp_path / "best.ckpt")
+
+    assert load_checkpoint(str(path)).stored_decode == name
+    # a run folder is a model too: upstream takes its best.ckpt
+    assert load_checkpoint(str(tmp_path)).stored_decode == name
+
+
+@needs(*UPSTREAM)
+def test_load_checkpoint_loads_a_checkpoint_that_keeps_no_decoder(tmp_path):
+    """Every checkpoint written before the decoder was kept is one of these."""
+    import torch
+    from benchmark.predict_dgs_2026 import load_checkpoint
+
+    from sign_language_segmentation.model.model import PoseTaggingModel
+
+    model = PoseTaggingModel(**SMALL)                # upstream's class keeps no decoder
+    path = checkpoint_of(model, tmp_path / "best.ckpt")
+    assert "decode" not in torch.load(path, map_location="cpu",
+                                      weights_only=False)["hyper_parameters"]
+
+    loaded = load_checkpoint(str(path))
+    assert loaded.stored_decode is None
+    for key, value in model.state_dict().items():
+        assert torch.equal(loaded.state_dict()[key], value), key
+
+
+@needs(*UPSTREAM, "safetensors")
+@pytest.mark.parametrize("stored", ["b-ignoring", None])
+def test_load_checkpoint_reads_the_config_of_a_safetensors_model(stored, tmp_path):
+    """The format of the shipped model: `config.json` beside `model.safetensors`."""
+    from benchmark.predict_dgs_2026 import load_checkpoint
+    from safetensors.torch import save_file
+
+    from sign_language_segmentation.model.model import PoseTaggingModel
+
+    config = {**SMALL, "pose_dims": list(SMALL["pose_dims"])}
+    if stored:
+        config["decode"] = stored
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    save_file(PoseTaggingModel(**SMALL).state_dict(), str(tmp_path / "model.safetensors"))
+
+    assert load_checkpoint(str(tmp_path)).stored_decode == stored
+    assert load_checkpoint(str(tmp_path / "model.safetensors")).stored_decode == stored
+
+
+@pytest.mark.parametrize("given, model_given, stored, expected", [
+    # the order: --decode of the run, the decoder stored with the model, b-honouring
+    (None, True, None, "b-honouring"),
+    (None, True, "i-runs-kept", "i-runs-kept"),
+    ("b-ignoring", True, "i-runs-kept", "b-ignoring"),
+    ("2023", True, "b-ignoring", "b-honouring"),
+    # the shipped model, which is what runs without --model, keeps its decoder
+    (None, False, None, "b-ignoring"),
+    ("b-honouring", False, None, "b-honouring"),
+    # MODEL_PATH can put another model in its place: what that one stores counts
+    (None, False, "i-runs-kept", "i-runs-kept"),
+])
+def test_decoder_of_a_prediction_run(given, model_given, stored, expected):
+    from benchmark.predict_dgs_2026 import decoder_of_run
+
+    assert decoder_of_run(given, model_given=model_given, stored=stored).name == expected
+
+
+#: what a model "predicts" in the test below, in upstream ids (UNK=0, O=1, B=2, I=3):
+#:   frame        0 1 2 3 4 5 6 7 8
+#:   both levels  O I I O B I B I O
+PREDICTED_IDS = [1, 3, 3, 1, 2, 3, 2, 3, 1]
+PREDICTED_SEGMENTS = {
+    "b-honouring": spans((4, 5), (6, 7)),
+    "b-ignoring": spans((1, 2), (4, 7)),
+    "i-runs-kept": spans((1, 2), (4, 5), (6, 7)),
+}
+
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("stored, model_given, option, expected", [
+    ("i-runs-kept", True, None, "i-runs-kept"),      # the decoder kept with the model
+    ("i-runs-kept", True, "upstream", "b-ignoring"),   # --decode first, by its earlier name
+    (None, True, None, "b-honouring"),               # a checkpoint that keeps none
+    (None, False, None, "b-ignoring"),               # the shipped model keeps its decoder
+    (None, False, "b-honouring", "b-honouring"),
+])
+def test_prediction_file_names_its_decoder_and_holds_its_segments(
+        stored, model_given, option, expected, tmp_path, monkeypatch, capsys):
+    """`predict_dgs_2026.py` itself, on one clip and with a model written by hand."""
+    import argparse
+
+    import numpy as np
+    from benchmark import predict_dgs_2026 as predict
+
+    frames = len(PREDICTED_IDS)
+
+    class ModelByHand:
+        stored_decode = stored
+        hparams = argparse.Namespace(num_frames=1024, pose_dims=(50, 3))
+
+        def __call__(self, pose, timestamps=None):
+            return {"sign": one_hot_log_probs(PREDICTED_IDS),
+                    "sentence": one_hot_log_probs(PREDICTED_IDS)}
+
+    gloss = {"start_time": 0.02, "end_time": 0.08}
+    clip = {"id": "by_hand", "fps": 50.0, "pose": None,
+            "sentences": [{**gloss, "glosses": [gloss]}]}
+    monkeypatch.setattr(predict, "load_checkpoint", lambda path, device="cpu": ModelByHand())
+    monkeypatch.setattr(predict.dgs_data, "iter_clips_native", lambda split: iter([clip]))
+    monkeypatch.setattr(predict, "prepare", lambda pose, fps, velocity=True: (
+        np.zeros((frames, 50, 3), dtype=np.float32), np.arange(frames, dtype=np.float32) / fps))
+
+    out = tmp_path / "prediction.json"
+    monkeypatch.setattr(sys, "argv", [
+        "predict_dgs_2026.py", "--split", "validation", "--out", str(out),
+        *(["--model", str(tmp_path / "best.ckpt")] if model_given else []),
+        *(["--decode", option] if option else [])])
+    predict.main()
+
+    payload = json.loads(out.read_text())
+    assert payload["decode"] == expected
+    assert f"segments via {expected}" in capsys.readouterr().out
+    stored_clip = payload["clips"][0]
+    for level in ("sign", "phrase"):
+        assert stored_clip["pred"][level] == PREDICTED_SEGMENTS[expected]
+        # the labels are stored in our ids whatever the decoder: O I I O B I B I O
+        assert stored_clip["pred_bio"][level] == rle([O, I, I, O, B, I, B, I, O])
+
+
+@needs(*UPSTREAM)
+def test_the_shipped_model_stores_no_decoder():
+    # so the b-ignoring of the shipped model is said in predict_dgs_2026.py, not read
+    from benchmark.predict_dgs_2026 import stored_decode
+
+    from sign_language_segmentation.bin import resolve_model_path
+
+    assert stored_decode(resolve_model_path()) is None

@@ -10,6 +10,8 @@ Same rule [`../metrics/`](../metrics/) follows for metric definitions. It fixes 
 
 A model's dedicated **preprocessing is not part of the protocol**: that is the model, not the measurement.
 
+Nor is its **decoder**, the step from the label of each frame to segments ([`../metrics/`](../metrics/README.md#decoders)): it belongs to the row. Rows are reported by one rule: a model trained **without class weights** with the `b-ignoring` decoder, a model trained **with class weights** with the `b-honouring` decoder. A model trained without class weights predicts few B, and `b-honouring` opens a segment only on a B. No script applies the rule: the person who launches a run or scores a checkpoint chooses with `--decode`. Frame F1 does not depend on the decoder; IoU, `%` and mF1S do.
+
 | deviation taken | why it is a bug, not a preference |
 |---|---|
 | 3 of 17 test clips dropped | no annotation at all — a free ~1.0 on every metric |
@@ -25,6 +27,8 @@ conda activate sas                                        # the 2026 model + sco
 python benchmark/predict_dgs_2026.py --split test
 python benchmark/score.py benchmark/predictions/*.json
 ```
+
+`predict_dgs_2026.py` decodes with the decoder named by `--decode`, else with the one kept in the checkpoint (a checkpoint of ours keeps the decoder of its training run), else with `b-honouring`. The shipped model, which is what runs without `--model`, keeps `b-ignoring`. The prediction file names its decoder under `decode`.
 
 `score.py` scores the segments stored in a prediction file. With `--decode <name>` it scores the stored frame labels instead, decoded again with that [decoder](../metrics/README.md#decoders), so one file serves every decoder: `python benchmark/score.py benchmark/predictions/*.json --decode i-runs-kept`. The file is not changed, and the row names the decoder.
 
