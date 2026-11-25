@@ -271,6 +271,108 @@ def test_validation_scores_the_segments_of_the_decoder_of_the_run(name, iou, per
         assert collected[level]["frame_f1_micro"] == [pytest.approx(4 / 5)]
 
 
+def missing_b_batch():
+    """Gold `O B I I O` and prediction `O I I I O`, at both levels: see the test above."""
+    import torch
+
+    gold = torch.tensor([[1, 2, 3, 3, 1]])
+    predicted = one_hot_log_probs([1, 3, 3, 3, 1])
+    return ({"pose": torch.zeros(1, 5, 50, 3), "bio": {"sign": gold, "sentence": gold}},
+            {"sign": predicted, "sentence": predicted})
+
+
+@needs(*UPSTREAM)
+def test_validation_also_scores_the_other_decoders(monkeypatch):
+    from experiments.validation_metrics import ValidationMetricsModel, _empty
+    from metrics import get_decoder, mf1s_from_counts
+
+    monkeypatch.setattr(ValidationMetricsModel, "decoder", get_decoder("b-honouring"))
+    model = ValidationMetricsModel(**SMALL)
+    batch, log_probs = missing_b_batch()
+
+    collected = _empty()
+    model._accumulate(batch, collected, log_probs=log_probs, others=True)
+    for level in ("sign", "phrase"):
+        # the decoder of the run, as before
+        assert collected[level]["iou"] == [0.0]
+        # the two others, and not the decoder of the run a second time
+        others = collected[level]["others"]
+        assert set(others) == {"b-ignoring", "i-runs-kept"}
+        for name in others:
+            assert others[name]["iou"] == [1.0]
+            assert others[name]["percentage"] == [1.0]
+            assert mf1s_from_counts(others[name]["counts"]) == 1.0
+
+
+@needs(*UPSTREAM)
+def test_train_batches_score_the_decoder_of_the_run_only():
+    from experiments.validation_metrics import ValidationMetricsModel, _empty
+
+    model = ValidationMetricsModel(**SMALL)
+    batch, log_probs = missing_b_batch()
+    collected = _empty()
+    model._accumulate(batch, collected, log_probs=log_probs)
+    assert collected["sign"]["others"] == {} and collected["phrase"]["others"] == {}
+
+
+@needs(*UPSTREAM)
+def test_other_decoders_are_logged_under_decoders_with_their_names(monkeypatch):
+    from experiments.validation_metrics import ValidationMetricsModel, _empty
+    from metrics import get_decoder
+
+    monkeypatch.setattr(ValidationMetricsModel, "decoder", get_decoder("b-ignoring"))
+    model = ValidationMetricsModel(**SMALL)
+    batch, log_probs = missing_b_batch()
+    collected = _empty()
+    model._accumulate(batch, collected, log_probs=log_probs, others=True)
+
+    logged = {}
+    monkeypatch.setattr(model, "log", lambda name, value, **_: logged.__setitem__(name, value))
+    model._log_other_decoders(collected, "validation_dgs_corpus")
+
+    stem = "decoders/validation_dgs_corpus"
+    assert set(logged) == {f"{stem}_{level}_{metric}_{name}"
+                           for level in ("sign", "phrase")
+                           for metric in ("iou", "percentage", "mf1s")
+                           for name in ("b-honouring", "i-runs-kept")}
+    # b-honouring finds no segment where the B is missing; i-runs-kept finds the gold one
+    assert logged[f"{stem}_sign_iou_b-honouring"] == 0.0
+    assert logged[f"{stem}_sign_percentage_b-honouring"] == 0.0
+    assert logged[f"{stem}_sign_mf1s_b-honouring"] == 0.0
+    assert logged[f"{stem}_phrase_iou_i-runs-kept"] == 1.0
+    assert logged[f"{stem}_phrase_percentage_i-runs-kept"] == 1.0
+    assert logged[f"{stem}_phrase_mf1s_i-runs-kept"] == 1.0
+
+
+@needs(*UPSTREAM)
+def test_a_validation_pass_logs_the_other_decoders_beside_the_metrics_of_the_run():
+    """One validation pass of Lightning over one clip written by hand, on a new model."""
+    import pytorch_lightning as pl
+    import torch
+    from experiments.validation_metrics import ValidationMetricsModel
+    from torch.utils.data import DataLoader
+
+    frames = 32
+    gold = torch.tensor([[1, 2, 3, 3, 1] + [1] * (frames - 5)])   # upstream ids
+    batch = {"pose": torch.zeros(1, frames, 50, 3), "bio": {"sign": gold, "sentence": gold}}
+    trainer = pl.Trainer(logger=False, enable_checkpointing=False, accelerator="cpu",
+                         enable_progress_bar=False, enable_model_summary=False)
+    logged = trainer.validate(ValidationMetricsModel(**SMALL),
+                              dataloaders=DataLoader([batch], batch_size=None),
+                              verbose=False)[0]
+
+    # the validation set is called "dev" when train.py has not named it
+    others = {name for name in logged if name.startswith("decoders/")}
+    assert others == {f"decoders/validation_dev_{level}_{metric}_{name}"
+                      for level in ("sign", "phrase")
+                      for metric in ("iou", "percentage", "mf1s")
+                      for name in ("b-ignoring", "i-runs-kept")}
+    # the metrics of the decoder of the run keep their names, the selection metric too
+    for name in ("validation_dev_sign_iou", "validation_dev_phrase_mf1s",
+                 "validation_sign_percentage", "validation_mean_mf1s"):
+        assert name in logged
+
+
 def test_train_refuses_a_decode_that_is_not_a_decoder(monkeypatch, capsys):
     from experiments import train
 
