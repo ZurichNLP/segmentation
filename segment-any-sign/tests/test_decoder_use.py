@@ -301,6 +301,7 @@ def test_redecode_refuses_a_file_it_would_lay_out_anew(decoded_file, monkeypatch
     with pytest.raises(SystemExit) as stop:
         run_redecode(monkeypatch, capsys, decoded_file, "--decode", "b-ignoring")
     assert "laid out" in str(stop.value)
+    assert "score.py" in str(stop.value) and "--decode" in str(stop.value)
     assert decoded_file.read_text() == compact
 
 
@@ -313,6 +314,7 @@ def test_redecode_refuses_a_file_without_frame_labels(decoded_file, monkeypatch,
     with pytest.raises(SystemExit) as stop:
         run_redecode(monkeypatch, capsys, decoded_file, "--decode", "b-ignoring")
     assert "no frame labels" in str(stop.value)
+    assert "score.py" not in str(stop.value)       # it has nothing to decode either
     assert decoded_file.read_bytes() == before
 
 
@@ -330,6 +332,8 @@ def test_redecode_refuses_a_file_whose_segments_are_not_its_labels_decoded(
     assert "b-honouring" in message and "'2023'" in message
     assert "clip by_hand, sign" in message
     assert "Nothing was written" in message
+    # and the way to see its scores under another decoder without changing it
+    assert f"python benchmark/score.py {prediction_file} --decode" in message
     assert prediction_file.read_bytes() == before
 
 
@@ -355,6 +359,8 @@ def test_redecode_refuses_a_file_of_a_threshold_model(thresholds_file, options,
     message = str(stop.value)
     assert str(thresholds_file) in message and "thresholds" in message
     assert "Nothing was written" in message
+    # score.py --decode refuses such a file too, so it is not offered
+    assert "score.py" not in message
     assert thresholds_file.read_bytes() == before
 
 
@@ -385,6 +391,23 @@ def test_redecode_writes_no_file_when_one_of_them_is_refused(decoded_file, thres
         run_redecode(monkeypatch, capsys, *files, "--decode", "b-ignoring")
     assert str(thresholds_file) in str(stop.value)
     assert [path.read_bytes() for path in files] == before
+
+
+def test_redecode_help_is_its_docstring(monkeypatch, capsys):
+    """The docstring is written for a person who has never seen the script."""
+    from benchmark import redecode
+
+    monkeypatch.setattr(sys, "argv", ["redecode.py", "--help"])
+    with pytest.raises(SystemExit) as stop:
+        redecode.main()
+    assert stop.value.code == 0
+    shown = capsys.readouterr().out
+    for heading in ("What a prediction file holds", "What this script does", "Why it exists",
+                    "Use it when", "Do not use it when", "How it protects a file"):
+        assert heading in redecode.__doc__ and heading in shown
+    # every line of the docstring is in the help, as it is written
+    for line in redecode.__doc__.strip().splitlines():
+        assert line.rstrip() in shown
 
 
 # --- score.py --decode and a file of a threshold model ------------------------------

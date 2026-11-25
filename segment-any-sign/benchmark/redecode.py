@@ -1,35 +1,54 @@
-"""Write the segments of a prediction file again, with another decoder.
+"""Change the decoder that a prediction file is stored with.
 
-A prediction file stores the frame labels of a model (`pred_bio`), the segments
-one decoder made of them (`pred`), and the name of that decoder (`decode`).
-`score.py --decode` scores the labels with another decoder and leaves the file
-alone. This script changes the file: it decodes `pred_bio` of every clip with
-the decoder named, writes the result as `pred`, and sets `decode`.
+What a prediction file holds
+    For each clip, the label of each frame (`pred_bio`) and the segments that one
+    decoder made of those labels (`pred`). For the whole file, the name of that
+    decoder (`decode`).
 
-Use it when the decoder a row is reported with changes (README.md, Rules). After
-it the file alone says how its row is scored, and `score.py <file>` with no
-option prints that row.
+What this script does
+    It decodes the stored labels again with the decoder you name, writes the result
+    as `pred`, and sets `decode`. No model is loaded and no data is read. Nothing
+    else in the file changes: not the labels, not the gold, no other field.
 
-Nothing else in the file changes: not the labels, not the gold, no other field,
-and the file keeps its layout. No model is loaded and no data is read, so the
-segments are those of the labels that are already there.
+Why it exists
+    `score.py <file>`, with no option, prints the row of that run in the README. So
+    a file must hold the segments of the decoder its row is reported with. When that
+    decoder changes for a run that is already recorded, the file has to change too.
+    The labels are already in the file, so the model does not need to run again.
 
-The stored segments are overwritten, so the script takes a file only when the
-file itself shows that they can be made again: the stored `pred` must equal the
-stored labels decoded with the decoder the file names, at every clip and level
-(a file without `decode` was written before 2026-09-09 and stands for
-`upstream`). Every other file is refused, with the reason, and nothing is
-written. A file of a 2023 model is the case that matters: `predict_dgs_2023.py`
-decodes its segments from the probabilities with thresholds and stores the
-argmax as labels, so those segments are in no other place, and such files are
-not in git. A file whose `thresholds` are not empty is refused for that alone.
-When several files are given and one is refused, none is written.
+Use it when
+    the decoder that a recorded row is reported with changes. Example: a run was
+    trained without class weights and its file was written with `b-honouring`, but
+    its row is reported with `b-ignoring` (README.md, Rules).
 
-Environment: **`sas`** — numpy and scikit-learn only, as for `score.py`.
+Do not use it when
+    * You only want to see the scores of a file under another decoder. Use
+      `score.py <file> --decode <name>`. It prints the scores and leaves the file
+      alone. That is the tool for comparing decoders.
+    * The run is new. Launch it with the right `--decode`, and its file is written
+      with the right segments from the start.
+    * The segments of the file did not come from its labels. The files of the 2023
+      models are like that: their segments come from thresholds on the
+      probabilities, and the file does not keep the probabilities. Such segments
+      cannot be built again from the labels.
+
+How it protects a file
+    Before it writes, the script checks that the stored segments equal the stored
+    labels decoded with the decoder the file names (`upstream` when it names none:
+    such a file was written before 2026-09-09). Only then can the old segments be
+    built again later, and only then is the file changed. For any other file it
+    writes nothing and says why. A file whose `thresholds` are not empty is refused
+    for that alone, and so is a file that is not laid out as `predict_dgs_2026.py`
+    writes it, because writing it back would change every line. When several files
+    are given and one is refused, none is written. `--dry-run` says what would
+    change and writes nothing. Files under `experiments/predictions/` are in git and
+    can be restored; files under `benchmark/predictions/` are not.
+
+Environment: **`sas`**, numpy and scikit-learn only, as for `score.py`.
 
     conda activate sas
-    python benchmark/redecode.py experiments/predictions/<run>.json --decode b-ignoring
-    python benchmark/redecode.py <file> --decode b-ignoring --dry-run   # write nothing
+    python benchmark/redecode.py <file> --decode b-ignoring --dry-run   # look first
+    python benchmark/redecode.py <file> --decode b-ignoring
 """
 
 from __future__ import annotations
@@ -76,6 +95,19 @@ def refusal(payload: dict) -> str | None:
                         f"{clip.get('id')}, {level}. Segments that the labels do not "
                         f"give cannot be made again from this file")
     return None
+
+
+def scores_hint(path: Path, payload: dict) -> str:
+    """How to see the scores of a refused file under another decoder, or "".
+
+    `score.py --decode` prints them and leaves the file alone. It is not offered
+    for a file it would refuse or could not decode: one with thresholds, or one
+    without frame labels.
+    """
+    if payload.get("thresholds") or any("pred_bio" not in clip for clip in payload["clips"]):
+        return ""
+    return (f" To see its scores under another decoder without changing it: "
+            f"python benchmark/score.py {path} --decode <name>")
 
 
 def redecode(payload: dict, decoder) -> tuple[dict, int, int]:
@@ -128,13 +160,15 @@ def main() -> None:
         # it must be laid out as it will be written, or every line would change.
         if json.dumps(payload, indent=2) != text:
             raise SystemExit(
-                f"{path} is not laid out as predict_dgs_2026.py writes it "
-                f"(json.dumps with indent=2): writing it back would change lines "
-                f"that have nothing to do with the decoder. Nothing was written.")
+                f"{path} is refused: it is not laid out as predict_dgs_2026.py writes "
+                f"it (json.dumps with indent=2), so writing it back would change lines "
+                f"that have nothing to do with the decoder. Nothing was written."
+                + scores_hint(path, payload))
         # The stored segments are about to be overwritten: only when the file
         # shows that they can be made again.
         if reason := refusal(payload):
-            raise SystemExit(f"{path} is refused: {reason}. Nothing was written.")
+            raise SystemExit(f"{path} is refused: {reason}. Nothing was written."
+                             + scores_hint(path, payload))
         payloads.append((path, payload))
 
     for path, payload in payloads:
