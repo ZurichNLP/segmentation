@@ -1143,3 +1143,78 @@ def test_no_script_decodes_on_its_own():
     offenders = {name: found for name in scanned
                  if (found := decoding_functions_named((ROOT / name).read_text()))}
     assert offenders == {}
+
+
+# --- add_result_row.py: the row says which decoder, when it is not the usual one ----
+
+SCORES = {"frame_f1": 0.5, "iou": 0.8, "percentage": 1.1, "mf1s": 0.3, "clips": 3, "skipped": 0}
+
+
+@pytest.mark.parametrize("youtube, dgs, note", [
+    # the usual case says nothing, also for scores written before the decoder was named
+    ({"raw": {"decode": "b-honouring"}, "filtered": {"decode": "b-honouring"}}, "2023", ""),
+    ({"raw": {}, "filtered": {}}, "b-honouring", ""),
+    ({"raw": {}}, None, ""),
+    # another decoder is named, by its name of today
+    ({"raw": {"decode": "i-runs-kept"}, "filtered": {"decode": "i-runs-kept"}}, "i-runs-kept",
+     "decoder `i-runs-kept`"),
+    ({"raw": {"decode": "b-ignoring"}}, "upstream", "decoder `b-ignoring`"),
+    ({"raw": {"decode": "b-ignoring"}}, None, "decoder `b-ignoring`"),
+    # and when the two parts of the row were not decoded alike, each is named
+    ({"raw": {"decode": "b-honouring"}, "filtered": {"decode": "b-honouring"}}, "b-ignoring",
+     "decoder `b-honouring` on YouTube, `b-ignoring` on DGS"),
+    ({"raw": {"decode": "i-runs-kept"}}, "2023",
+     "decoder `i-runs-kept` on YouTube, `b-honouring` on DGS"),
+])
+def test_decoder_note_of_a_row(youtube, dgs, note):
+    from experiments.add_result_row import decoder_note
+
+    assert decoder_note(youtube, dgs) == note
+
+
+README_BY_HAND = """# Experiments
+
+| | | | | Filtered YouTube dev | | | | Raw YouTube dev | | | | Out of domain (DGS) | | | |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **#** | **run** | **change** | **step** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** | **F1-ma** | **IoU** | **%** | **mF1S** |
+| 1 | `earlier_run-2026.09.09` | weights 2,20,1 | 100 | 0.1 | 0.1 | 0.1 | 0.1 | 0.1 | 0.1 | 0.1 | 0.1 | 0.1 | 0.1 | 0.1 | 0.1 |
+
+Text after the table.
+"""
+
+
+@needs("torch")
+@pytest.mark.parametrize("name, change", [
+    ("b-honouring", "weights 2,80,1"),
+    ("i-runs-kept", "weights 2,80,1; decoder `i-runs-kept`"),
+    ("b-ignoring", "weights 2,80,1; decoder `b-ignoring`"),
+])
+def test_added_row_names_the_decoder_when_it_is_not_b_honouring(name, change, tmp_path,
+                                                                monkeypatch, capsys):
+    """`add_result_row.py` itself, on a run folder, scores and a README written by hand."""
+    import paths
+    import torch
+    from experiments import add_result_row
+
+    run = "by_hand-2026.11.25"
+    run_dir = paths.output("dist") / run
+    run_dir.mkdir(parents=True)
+    torch.save({"global_step": 1234}, run_dir / "best.ckpt")
+    youtube = tmp_path / "youtube_dev.json"
+    youtube.write_text(json.dumps({"raw": {**SCORES, "decode": name},
+                                   "filtered": {**SCORES, "decode": name}}))
+    dgs = tmp_path / "by_hand.json"
+    dgs.write_text(json.dumps({**FILE_BY_HAND, "decode": name,
+                               "clips": [{**CLIP, "pred": CLIP_SEGMENTS[name]}]}, indent=2))
+    readme = tmp_path / "README.md"
+    readme.write_text(README_BY_HAND)
+
+    monkeypatch.setattr(sys, "argv", ["add_result_row.py", "--run", run, "--note",
+                                      "weights 2,80,1", "--youtube", str(youtube),
+                                      "--dgs", str(dgs), "--readme", str(readme)])
+    add_result_row.main()
+
+    row = next(line for line in readme.read_text().splitlines() if "`by_hand-2026.11.25`" in line)
+    cells = [cell.strip() for cell in row.strip("|").split("|")]
+    assert cells[:4] == ["2", "`by_hand-2026.11.25`", change, "1,234"]
+    assert len(cells) == 16

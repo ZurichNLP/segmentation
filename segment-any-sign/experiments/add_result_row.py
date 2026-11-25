@@ -12,7 +12,11 @@ number comes from a file the evaluation just wrote — nothing is re-scored here
         --note "weights 2,80,1, 40k steps"
 
 The `change` column is the one thing a script cannot know, so it takes `--note`;
-without one the row says so, to be filled in. A run already in the table is left
+without one the row says so, to be filled in. The rows of this table are scored
+with the decoder `b-honouring`, and a row scored that way says nothing about it.
+A row scored with another decoder says which in its `change` cell, so that it is
+not read against the others: the scores name their decoder, and it is read from
+them. A run already in the table is left
 alone, so re-running is safe. Two runs finishing at once take a file lock rather
 than each writing over the other's row.
 """
@@ -42,6 +46,34 @@ def _cells(scores: dict | None) -> list[str]:
     if not scores:
         return ["—"] * len(METRICS)
     return [f"{scores[key]:.3f}" for key in METRICS]
+
+
+#: the decoder of every row of the table so far: a row scored with it says nothing
+USUAL_DECODER = "b-honouring"
+
+
+def decoder_note(youtube: dict, dgs_decode: str | None) -> str:
+    """What the `change` cell says about the decoder of a row, or "" for the usual one.
+
+    `youtube` is the JSON of `eval_youtube.py`, whose scores name their decoder
+    under `decode`; scores written before they did were all `b-honouring`.
+    `dgs_decode` is the `decode` field of the DGS prediction file, by its name of
+    today or an earlier one, or None when the row has no DGS scores. When the
+    two parts of the row were not decoded alike, each is named.
+    """
+    from metrics import get_decoder
+
+    on_youtube = sorted({get_decoder(scores.get("decode", USUAL_DECODER)).name
+                         for scores in youtube.values()})
+    on_dgs = [get_decoder(dgs_decode).name] if dgs_decode else []
+    names = sorted(set(on_youtube + on_dgs))
+    if names in ([], [USUAL_DECODER]):
+        return ""
+    if len(names) == 1:
+        return f"decoder `{names[0]}`"
+    parts = [(", ".join(f"`{name}`" for name in found), where)
+             for found, where in ((on_youtube, "YouTube"), (on_dgs, "DGS")) if found]
+    return "decoder " + ", ".join(f"{found} on {where}" for found, where in parts)
 
 
 def build_row(number: int, run: str, note: str, step: int,
@@ -105,9 +137,15 @@ def main() -> None:
     youtube_path = args.youtube or run_dir / "youtube_dev.json"
     youtube = json.loads(youtube_path.read_text())
     dgs_path = args.dgs or HERE / "predictions" / f"{run_id}.json"
-    dgs = score_file(dgs_path)["levels"].get("phrase") if dgs_path.exists() else None
+    dgs = dgs_decode = None
+    if dgs_path.exists():
+        dgs = score_file(dgs_path)["levels"].get("phrase")
+        # a file without the field was written before 2026-09-09, by upstream's function
+        dgs_decode = json.loads(dgs_path.read_text()).get("decode", "upstream")
 
     note = args.note.strip() or "*(describe the change)*"
+    if decoder := decoder_note(youtube, dgs_decode):
+        note = f"{note}; {decoder}"
     with open(args.readme, "r+", encoding="utf-8") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         text, row = insert_row(
