@@ -20,7 +20,13 @@ again with that decoder of [`../metrics/decoders.py`](../metrics/decoders.py), s
 one file serves every decoder. The file is not changed, and the row names the
 decoder. Frame F1 is the same either way: it never reads segments.
 
-    python benchmark/score.py benchmark/predictions/*.json --decode i-runs-kept
+    python benchmark/score.py experiments/predictions/05_dgs_w1-5-1_s42.json --decode i-runs-kept
+
+`--decode` is for a file whose segments were decoded from its stored labels, as
+`predict_dgs_2026.py` writes them. A file whose `thresholds` are not empty is
+refused: `predict_dgs_2023.py` decodes its segments from the probabilities with
+thresholds and stores only the argmax as labels, so decoding those labels would
+score another model than the one the file is the row of.
 """
 
 from __future__ import annotations
@@ -105,7 +111,9 @@ def score_file(path: Path, annotated_only: bool = True, decoder=None) -> dict:
 
     `decoder` is a decoder of `metrics.decoders`, or None for the segments stored
     in the file. The row says which under `decode`: the name of the decoder, or
-    None.
+    None. With a decoder, a file whose `thresholds` are not empty stops the
+    scoring with a message that names it: its labels are not what its segments
+    were decoded from.
 
     `annotated_only` (the default) drops clips with no gold at that level. Three
     of the 17 DGS test clips are the unannotated partner in a two-signer
@@ -118,6 +126,13 @@ def score_file(path: Path, annotated_only: bool = True, decoder=None) -> dict:
     """
     payload = json.loads(path.read_text())
     clips = payload["clips"]
+    if decoder is not None and payload.get("thresholds"):
+        raise SystemExit(
+            f"{path}: --decode cannot be used on this file. Its `thresholds` are not "
+            f"empty, so its segments were decoded from probabilities with thresholds, "
+            f"and its stored labels are only the argmax: decoding them again would "
+            f"score another model than the one this file is the row of. Score it "
+            f"without --decode.")
 
     results = {}
     for level in LEVELS:
@@ -214,7 +229,8 @@ def main() -> None:
                              "decoder and score those segments, in place of the "
                              "segments stored in the file. Not given: the stored "
                              "segments. '2023' and 'upstream' are the earlier "
-                             "names of b-honouring and b-ignoring")
+                             "names of b-honouring and b-ignoring. A file with "
+                             "thresholds, as the 2023 models have, is refused")
     parser.add_argument("--out", type=Path, default=None, help="write results as JSON")
     args = parser.parse_args()
 

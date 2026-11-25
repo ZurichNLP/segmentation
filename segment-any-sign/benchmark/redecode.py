@@ -14,6 +14,17 @@ Nothing else in the file changes: not the labels, not the gold, no other field,
 and the file keeps its layout. No model is loaded and no data is read, so the
 segments are those of the labels that are already there.
 
+The stored segments are overwritten, so the script takes a file only when the
+file itself shows that they can be made again: the stored `pred` must equal the
+stored labels decoded with the decoder the file names, at every clip and level
+(a file without `decode` was written before 2026-09-09 and stands for
+`upstream`). Every other file is refused, with the reason, and nothing is
+written. A file of a 2023 model is the case that matters: `predict_dgs_2023.py`
+decodes its segments from the probabilities with thresholds and stores the
+argmax as labels, so those segments are in no other place, and such files are
+not in git. A file whose `thresholds` are not empty is refused for that alone.
+When several files are given and one is refused, none is written.
+
 Environment: **`sas`** — numpy and scikit-learn only, as for `score.py`.
 
     conda activate sas
@@ -32,6 +43,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from benchmark.score import unrle
 from metrics import decoder_names, get_decoder
+
+
+def refusal(payload: dict) -> str | None:
+    """Why the segments of this file must not be written again, or None when they may.
+
+    They may when the file itself shows that nothing would be lost: its stored
+    segments are its stored labels decoded with the decoder it names. Then the
+    same segments can be made again at any time, with that decoder.
+    """
+    if payload.get("thresholds"):
+        return ("its `thresholds` are not empty, so its segments were decoded from "
+                "probabilities with thresholds, as predict_dgs_2023.py does, and not "
+                "from its stored labels, which are the argmax. They cannot be made "
+                "again from this file")
+    # a file without the field was written before 2026-09-09, by upstream's function
+    named = payload.get("decode", "upstream")
+    try:
+        decoder = get_decoder(named)
+    except ValueError as error:
+        return f"it names a decoder that does not exist: {error}"
+    said = (f"the decoder it names, {named!r}" if "decode" in payload else
+            "it names no decoder, which stands for 'upstream'")
+    for clip in payload["clips"]:
+        if "pred_bio" not in clip:
+            return (f"clip {clip.get('id')} has no frame labels to decode; "
+                    f"re-run the predict step")
+        for level, runs in clip["pred_bio"].items():
+            if decoder.decode(unrle(runs)) != clip["pred"].get(level):
+                return (f"its stored segments are not its stored labels decoded with "
+                        f"{decoder.name} ({said}): they differ first at clip "
+                        f"{clip.get('id')}, {level}. Segments that the labels do not "
+                        f"give cannot be made again from this file")
+    return None
 
 
 def redecode(payload: dict, decoder) -> tuple[dict, int, int]:
@@ -74,6 +118,9 @@ def main() -> None:
     args = parser.parse_args()
 
     decoder = get_decoder(args.decode)
+    # Every file is read and checked before any is written, so that one file
+    # which is refused leaves all of them as they were.
+    payloads = []
     for path in args.predictions:
         text = path.read_text()
         payload = json.loads(text)
@@ -84,6 +131,13 @@ def main() -> None:
                 f"{path} is not laid out as predict_dgs_2026.py writes it "
                 f"(json.dumps with indent=2): writing it back would change lines "
                 f"that have nothing to do with the decoder. Nothing was written.")
+        # The stored segments are about to be overwritten: only when the file
+        # shows that they can be made again.
+        if reason := refusal(payload):
+            raise SystemExit(f"{path} is refused: {reason}. Nothing was written.")
+        payloads.append((path, payload))
+
+    for path, payload in payloads:
         before = payload.get("decode", "none")
         payload, changed, total = redecode(payload, decoder)
         if not args.dry_run:
