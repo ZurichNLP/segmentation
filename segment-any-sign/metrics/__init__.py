@@ -1,5 +1,15 @@
-"""Segmentation metrics for the benchmark."""
+"""Segmentation metrics for the benchmark, and the decoders that give them segments."""
 
+from metrics.decoders import (
+    DECODERS,
+    BHonouring,
+    BIgnoring,
+    Decoder,
+    IRunsKept,
+    choose_decoder,
+    decoder_names,
+    get_decoder,
+)
 from metrics.segmentation import (
     MF1S_THRESHOLDS,
     aggregate,
@@ -18,12 +28,20 @@ from metrics.segmentation import (
 )
 
 __all__ = [
+    "DECODERS",
     "MF1S_THRESHOLDS",
+    "BHonouring",
+    "BIgnoring",
+    "Decoder",
+    "IRunsKept",
     "aggregate",
     "bio_to_segments",
+    "choose_decoder",
+    "decoder_names",
     "evaluate_level",
     "frame_f1",
     "frame_f1_micro",
+    "get_decoder",
     "global_iou",
     "greedy_match",
     "iou_matrix",
