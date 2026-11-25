@@ -9,6 +9,7 @@ and a segment as `(first frame, last frame)`, both inside the segment.
 
 import json
 import random
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -25,6 +26,8 @@ from metrics.decoders import (
 )
 
 from tests.test_locations import needs
+
+ROOT = Path(__file__).resolve().parents[1]   # segment-any-sign/
 
 LETTERS = {"O": 0, "B": 1, "I": 2}
 
@@ -296,3 +299,30 @@ def test_given_decoder_comes_before_the_stored_one():
 def test_a_stored_name_that_is_not_a_decoder_is_an_error():
     with pytest.raises(ValueError):
         choose_decoder(None, "likeliest")
+
+
+# --- the committed prediction files ---------------------------------------------
+
+# Every file that is there, with no list of them here: a new file is tested too.
+PREDICTIONS = sorted((ROOT / "experiments" / "predictions").glob("*.json"))
+
+
+def test_there_are_committed_prediction_files():
+    assert PREDICTIONS, "no file in experiments/predictions/: the next test would test nothing"
+
+
+@pytest.mark.parametrize("path", PREDICTIONS, ids=lambda path: path.stem)
+def test_committed_prediction_file_is_reproduced_by_the_decoder_that_made_it(path):
+    """The stored segments of a file are its stored labels, decoded by the decoder it names.
+
+    `decode` is that name. A file without it was written before 2026-09-09, when
+    upstream's function was the only decoder, so it stands for `upstream`.
+    """
+    from benchmark.score import unrle
+
+    payload = json.loads(path.read_text())
+    decoder = get_decoder(payload.get("decode", "upstream"))
+    for clip in payload["clips"]:
+        for level, stored in clip["pred"].items():
+            decoded = decoder.decode(unrle(clip["pred_bio"][level]))
+            assert decoded == stored, f"{path.name}, clip {clip['id']}, {level}, {decoder.name}"
