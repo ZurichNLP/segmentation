@@ -527,6 +527,9 @@ def main() -> None:
     args.decode = decoder.name
 
     report_effective_config(args, mine, _dated_run_name(args.run_name))
+    # said once, after the configuration it is about; it changes and stops nothing
+    if warning := decoder_warning(weighting, decoder.name):
+        print(warning)
 
     run_dir = Path("dist") / _dated_run_name(args.run_name)
 
@@ -875,6 +878,25 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
     cache_path.write_text(json.dumps(weights))
     print(f"cached to {cache_path}")
     return weights
+
+
+def decoder_warning(weighting: str, decoder: str) -> str | None:
+    """One line for the log when a run without class weights decodes with b-honouring.
+
+    `weighting` is the class weighting after `--class-weights auto` was resolved,
+    and `decoder` the name of the decoder of the run. A model trained without
+    class weights predicts few B, and `b-honouring` opens a segment only on a B,
+    so validation finds few segments and the selection metric says little. The
+    line says so and names the option. Nothing else follows from it: the decoder
+    stays the one that was chosen, and the run goes on. None in every other case.
+    """
+    if weighting != "none" or decoder != "b-honouring":
+        return None
+    return ("warning: this run trains without class weights and decodes with "
+            "b-honouring, which opens a segment only on a B. A model trained "
+            "without class weights predicts few B, so validation may find few "
+            "segments and the selection metric may stay low. --decode b-ignoring "
+            "does not read B.")
 
 
 def report_effective_config(args, mine, run_name: str) -> None:

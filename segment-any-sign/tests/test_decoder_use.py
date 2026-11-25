@@ -279,3 +279,26 @@ def test_train_refuses_a_decode_that_is_not_a_decoder(monkeypatch, capsys):
         train.main()
     assert stop.value.code == 2
     assert "b-honouring" in capsys.readouterr().err
+
+
+# --- training: the warning ---------------------------------------------------------
+
+@pytest.mark.parametrize("weighting, decoder", [
+    ("none", "b-ignoring"), ("none", "i-runs-kept"),
+    ("inverse", "b-honouring"), ("inverse-b", "b-honouring"), ("1,5,1", "b-honouring"),
+    ("inverse", "b-ignoring"), ("2,80,1", "i-runs-kept"),
+])
+def test_no_warning_with_class_weights_or_with_another_decoder(weighting, decoder):
+    from experiments.train import decoder_warning
+
+    assert decoder_warning(weighting, decoder) is None
+
+
+def test_warning_for_a_run_without_class_weights_that_decodes_with_b_honouring():
+    from experiments.train import decoder_warning
+
+    warning = decoder_warning("none", "b-honouring")
+    # one line of the log, which says what is the matter and what to pass instead
+    assert warning.startswith("warning: ") and "\n" not in warning
+    assert "without class weights" in warning and "b-honouring" in warning
+    assert "--decode b-ignoring" in warning
