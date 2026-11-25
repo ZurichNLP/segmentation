@@ -632,6 +632,140 @@ def test_train_refuses_a_decode_that_is_not_a_decoder(monkeypatch, capsys):
     assert "b-honouring" in capsys.readouterr().err
 
 
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("given, expected", [
+    (None, "b-honouring"),            # --decode not given: the default
+    ("b-honouring", "b-honouring"),
+    ("b-ignoring", "b-ignoring"),
+    ("i-runs-kept", "i-runs-kept"),
+    ("2023", "b-honouring"),          # the earlier names
+    ("upstream", "b-ignoring"),
+])
+def test_set_decoder_gives_the_run_its_decoder_in_three_places(given, expected, monkeypatch):
+    """What `train.py` does with `--decode`: the model class, a model built after, and `args`."""
+    import argparse
+
+    from experiments.train import set_decoder
+    from experiments.validation_metrics import ValidationMetricsModel
+    from metrics import get_decoder
+
+    # another decoder than the expected one to start from, so that each case is
+    # seen to set it; monkeypatch puts the decoder of the class back afterwards
+    other = "b-ignoring" if expected == "i-runs-kept" else "i-runs-kept"
+    monkeypatch.setattr(ValidationMetricsModel, "decoder", get_decoder(other))
+    args = argparse.Namespace()
+
+    decoder = set_decoder(args, given)
+
+    assert decoder.name == expected
+    # validation decodes with the decoder of the class
+    assert ValidationMetricsModel.decoder is decoder
+    # a model built now keeps the name, and so will its checkpoints
+    assert ValidationMetricsModel(**SMALL).hparams["decode"] == expected
+    # and run_config.json and W&B get it from here
+    assert args.decode == expected
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    """A folder that stands for `segment-any-sign/`, as the working directory."""
+    folder = tmp_path / "project"
+    folder.mkdir()
+    monkeypatch.chdir(folder)
+    return folder
+
+
+def start_main(monkeypatch, *arguments) -> None:
+    """`python experiments/train.py ARGUMENTS` in this process, with no data read.
+
+    `main()` sets names of the upstream package and of the model class for the
+    run it starts. They are put back after the test, so that no other test
+    meets them. The two functions that read the corpus are replaced.
+    """
+    # upstream's args.py parses the command line when it is first imported, and
+    # the import of its training module does that: not with the line of pytest
+    monkeypatch.setattr(sys, "argv", ["train.py"])
+    from experiments import train
+    from experiments.validation_metrics import ValidationMetricsModel
+
+    import sign_language_segmentation.train as upstream_train
+    from sign_language_segmentation.datasets import common
+
+    for name in ("PoseTaggingModel", "get_dataloader", "pl"):
+        monkeypatch.setattr(upstream_train, name, getattr(upstream_train, name))
+    monkeypatch.setattr(common, "create_bio", common.create_bio)
+    monkeypatch.setattr(common, "open", open, raising=False)
+    for name in ("val_dataset_names", "levels", "accumulate", "grad_log_every",
+                 "metrics_every_n_steps", "class_weights", "decoder"):
+        monkeypatch.setattr(ValidationMetricsModel, name, getattr(ValidationMetricsModel, name))
+
+    # the run folder is not what these tests are about: no link `dist` is made
+    monkeypatch.setattr(train, "link_dist", lambda project=None: None)
+    monkeypatch.setattr(train, "dataset_size", lambda args: 4)
+    monkeypatch.setattr(train, "inverse_class_weights",
+                        lambda args, levels, **options: {level: [0.0, 1.0, 9.0, 1.0]
+                                                         for level in levels})
+    monkeypatch.setattr(sys, "argv", ["train.py", "--no_wandb", "--device", "cpu",
+                                      "--datasets", "dgs_corpus", "--limit", "2",
+                                      *arguments])
+    # and now it must parse the line of this test, so it is imported anew
+    monkeypatch.delitem(sys.modules, "sign_language_segmentation.args", raising=False)
+    train.main()
+
+
+class Reached(Exception):
+    """Raised in place of the next step of `main()`, to stop it there."""
+
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("options, weighting, decoder", [
+    ([], "inverse", "b-honouring"),                           # auto with dice off
+    (["--dice_loss_weight", "1.5"], "none", "b-honouring"),   # auto with dice on: no weights
+    (["--class-weights", "none"], "none", "b-honouring"),
+    (["--class-weights", "none", "--decode", "upstream"], "none", "b-ignoring"),
+    (["--class-weights", "inverse-b", "--decode", "2023"], "inverse-b", "b-honouring"),
+    (["--class-weights", "1,5,1", "--decode", "i-runs-kept"], "1,5,1", "i-runs-kept"),
+])
+def test_main_asks_for_the_warning_with_the_resolved_class_weighting(
+        options, weighting, decoder, project, monkeypatch):
+    """`--class-weights auto` is resolved before the warning is asked for."""
+    from experiments import train
+    from experiments.validation_metrics import ValidationMetricsModel
+
+    def asked(*arguments):
+        # what the run is in at this point, beside what the warning is asked with
+        raise Reached(arguments, ValidationMetricsModel.decoder.name)
+
+    monkeypatch.setattr(train, "decoder_warning", asked)
+    with pytest.raises(Reached) as reached:
+        start_main(monkeypatch, *options)
+    arguments, decoder_of_the_class = reached.value.args
+    assert arguments == (weighting, decoder)
+    assert decoder_of_the_class == decoder
+
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("options, warnings", [
+    (["--class-weights", "none"], 1),
+    (["--dice_loss_weight", "1.5"], 1),
+    ([], 0),
+    (["--class-weights", "none", "--decode", "b-ignoring"], 0),
+])
+def test_main_prints_the_warning_once_and_goes_on(options, warnings, project,
+                                                  monkeypatch, capsys):
+    from experiments import train
+
+    def next_step(args):
+        raise Reached
+
+    # with --dry-run the step after the warning is the dry run itself
+    monkeypatch.setattr(train, "dry_run", next_step)
+    with pytest.raises(Reached):
+        start_main(monkeypatch, "--dry-run", *options)
+    printed = capsys.readouterr().out
+    assert printed.count("warning: this run trains without class weights") == warnings
+
+
 # --- training: the warning ---------------------------------------------------------
 
 @pytest.mark.parametrize("weighting, decoder", [

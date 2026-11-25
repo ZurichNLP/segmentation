@@ -110,7 +110,7 @@ import paths
 
 
 def main() -> None:
-    from metrics import choose_decoder, decoder_names
+    from metrics import decoder_names
 
     # Take our flags out of argv first: upstream's args.py calls parse_args() at
     # import time and rejects anything it does not know.
@@ -519,12 +519,7 @@ def main() -> None:
 
     # The decoder of the run: --decode, else the default, b-honouring. The person
     # who launches the run chooses it; nothing here derives it from the recipe.
-    # The model decodes with it at validation and keeps its name in every
-    # checkpoint (`ValidationMetricsModel`), and `args.decode` puts it into
-    # run_config.json and W&B.
-    decoder = choose_decoder(mine.decode)
-    ValidationMetricsModel.decoder = decoder
-    args.decode = decoder.name
+    decoder = set_decoder(args, mine.decode)
 
     report_effective_config(args, mine, _dated_run_name(args.run_name))
     # said once, after the configuration it is about; it changes and stops nothing
@@ -878,6 +873,29 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
     cache_path.write_text(json.dumps(weights))
     print(f"cached to {cache_path}")
     return weights
+
+
+def set_decoder(args, given: str | None):
+    """Give the run its decoder, in the three places that must agree, and return it.
+
+    `given` is the value of `--decode`, by its name of today or an earlier one,
+    or None when the option was not given: then the default
+    (`metrics.choose_decoder`).
+
+      * `ValidationMetricsModel.decoder`: validation decodes with it, so the
+        selection metric and the checkpoint that is kept follow it;
+      * a model built after this keeps the name as the hyperparameter `decode`,
+        and Lightning writes it into every checkpoint of the run;
+      * `args.decode`: the name goes into run_config.json and W&B.
+    """
+    from metrics import choose_decoder
+
+    from experiments.validation_metrics import ValidationMetricsModel
+
+    decoder = choose_decoder(given)
+    ValidationMetricsModel.decoder = decoder
+    args.decode = decoder.name
+    return decoder
 
 
 def decoder_warning(weighting: str, decoder: str) -> str | None:
