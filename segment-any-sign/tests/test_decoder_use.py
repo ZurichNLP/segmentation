@@ -645,6 +645,51 @@ def test_a_validation_pass_logs_the_other_decoders_beside_the_metrics_of_the_run
         assert name in logged
 
 
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("option, selection", [
+    ("b-honouring", 0.0),      # no B, so no segment: nothing matches the gold one
+    ("b-ignoring", 1.0),       # the run of I is the gold segment
+    ("i-runs-kept", 1.0),
+    ("2023", 0.0),             # the earlier names
+    ("upstream", 1.0),
+])
+def test_selection_metric_follows_the_decoder_of_the_run(option, selection, monkeypatch):
+    """From `--decode` to `validation_mean_mf1s`, the metric that keeps a checkpoint.
+
+    Gold `O B I I O`, predicted `O I I I O`, at both levels. `train.py` gives
+    the run its decoder with `set_decoder`; then one validation pass of
+    Lightning, in which the model predicts those labels whatever its weights.
+    """
+    import argparse
+
+    import pytorch_lightning as pl
+    from experiments import validation_metrics
+    from experiments.train import set_decoder
+    from experiments.validation_metrics import ValidationMetricsModel
+    from torch.utils.data import DataLoader
+
+    # set_decoder sets the decoder of the class: it is put back after the test
+    monkeypatch.setattr(ValidationMetricsModel, "decoder", ValidationMetricsModel.decoder)
+    set_decoder(argparse.Namespace(), option)
+
+    batch, log_probs = missing_b_batch()
+    monkeypatch.setattr(validation_metrics, "masked_forward",
+                        lambda model, pose, timestamps=None, lengths=None: log_probs)
+    trainer = pl.Trainer(logger=False, enable_checkpointing=False, accelerator="cpu",
+                         enable_progress_bar=False, enable_model_summary=False)
+    logged = trainer.validate(ValidationMetricsModel(**SMALL),
+                              dataloaders=DataLoader([batch], batch_size=None),
+                              verbose=False)[0]
+
+    # what ModelCheckpoint monitors, and the same under the name of the set
+    assert logged["validation_mean_mf1s"] == selection
+    assert logged["validation_dev_mean_mf1s"] == selection
+    for level in ("sign", "phrase"):
+        assert logged[f"validation_{level}_mf1s"] == selection
+        # frame F1 is the same for every decoder: four of five frames are right
+        assert logged[f"validation_{level}_frame_f1_micro"] == pytest.approx(4 / 5)
+
+
 def test_train_refuses_a_decode_that_is_not_a_decoder(monkeypatch, capsys):
     from experiments import train
 
