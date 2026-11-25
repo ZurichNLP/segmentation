@@ -945,17 +945,11 @@ PREDICTED_SEGMENTS = {
 }
 
 
-@needs(*UPSTREAM)
-@pytest.mark.parametrize("stored, model_given, option, expected", [
-    ("i-runs-kept", True, None, "i-runs-kept"),      # the decoder kept with the model
-    ("i-runs-kept", True, "upstream", "b-ignoring"),   # --decode first, by its earlier name
-    (None, True, None, "b-honouring"),               # a checkpoint that keeps none
-    (None, False, None, "b-ignoring"),               # the shipped model keeps its decoder
-    (None, False, "b-honouring", "b-honouring"),
-])
-def test_prediction_file_names_its_decoder_and_holds_its_segments(
-        stored, model_given, option, expected, tmp_path, monkeypatch, capsys):
-    """`predict_dgs_2026.py` itself, on one clip and with a model written by hand."""
+def run_predict(monkeypatch, tmp_path, stored, model_given, option) -> dict:
+    """`predict_dgs_2026.py` itself, on one clip and with a model written by hand.
+
+    `stored` is the decoder the model keeps, or None. Returns the prediction file.
+    """
     import argparse
 
     import numpy as np
@@ -985,8 +979,20 @@ def test_prediction_file_names_its_decoder_and_holds_its_segments(
         *(["--model", str(tmp_path / "best.ckpt")] if model_given else []),
         *(["--decode", option] if option else [])])
     predict.main()
+    return json.loads(out.read_text())
 
-    payload = json.loads(out.read_text())
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("stored, model_given, option, expected", [
+    ("i-runs-kept", True, None, "i-runs-kept"),      # the decoder kept with the model
+    ("i-runs-kept", True, "upstream", "b-ignoring"),   # --decode first, by its earlier name
+    (None, True, None, "b-honouring"),               # a checkpoint that keeps none
+    (None, False, None, "b-ignoring"),               # the shipped model keeps its decoder
+    (None, False, "b-honouring", "b-honouring"),
+])
+def test_prediction_file_names_its_decoder_and_holds_its_segments(
+        stored, model_given, option, expected, tmp_path, monkeypatch, capsys):
+    payload = run_predict(monkeypatch, tmp_path, stored, model_given, option)
     assert payload["decode"] == expected
     assert f"segments via {expected}" in capsys.readouterr().out
     stored_clip = payload["clips"][0]
@@ -1195,19 +1201,112 @@ def test_plot_with_reuse_says_when_decode_is_not_what_the_cache_holds(options, n
     assert cache.read_bytes() == before
 
 
-@pytest.mark.parametrize("script", ["train", "eval_youtube", "plot_segmentation"])
-def test_every_script_takes_the_earlier_names_too(script, monkeypatch, capsys):
-    """`--decode 2023` and `--decode upstream` are read wherever `--decode` exists."""
-    import importlib
+# --- the earlier names, 2023 and upstream, in each script that takes --decode -----------
 
-    module = importlib.import_module(f"experiments.{script}")
-    # a name that is no decoder stops the script, and the message lists what it takes
-    monkeypatch.setattr(sys, "argv", [f"{script}.py", "--run", "none", "--decode", "likeliest"])
-    with pytest.raises(SystemExit):
-        module.main()
-    message = capsys.readouterr().err
-    for name in ("b-honouring", "b-ignoring", "i-runs-kept", "2023", "upstream"):
-        assert name in message
+def run_folder(run: str):
+    """An empty run folder with a `best.ckpt`, for a script that takes `--run`."""
+    import paths
+
+    folder = paths.output("dist") / run
+    folder.mkdir(parents=True)
+    (folder / "best.ckpt").write_bytes(b"")
+    return folder
+
+
+def used_by_score(option, request, monkeypatch, capsys) -> str:
+    out = run_score(monkeypatch, capsys, request.getfixturevalue("prediction_file"),
+                    "--decode", option)
+    row = next(line for line in out.splitlines() if line.startswith("model by hand"))
+    name = row.split("[")[1].split("]")[0]
+    # the row is the one of that decoder, not only named after it
+    assert numbers(row)[2:4] == [f"{value:.3f}" for value in DECODED[name]["sign"]]
+    return name
+
+
+def used_by_redecode(option, request, monkeypatch, capsys) -> str:
+    path = request.getfixturevalue("decoded_file")
+    run_redecode(monkeypatch, capsys, path, "--decode", option)
+    payload = json.loads(path.read_text())
+    assert payload["clips"][0]["pred"] == CLIP_SEGMENTS[payload["decode"]]
+    return payload["decode"]
+
+
+def used_by_predict(option, request, monkeypatch, capsys) -> str:
+    payload = run_predict(monkeypatch, request.getfixturevalue("tmp_path"), stored=None,
+                          model_given=True, option=option)
+    assert payload["clips"][0]["pred"]["sign"] == PREDICTED_SEGMENTS[payload["decode"]]
+    return payload["decode"]
+
+
+def used_by_eval_youtube(option, request, monkeypatch, capsys) -> str:
+    from benchmark import predict_dgs_2026
+    from experiments import eval_youtube
+
+    request.getfixturevalue("youtube_clip")
+    run_folder("by_hand-2026.11.25")
+    monkeypatch.setattr(predict_dgs_2026, "load_checkpoint",
+                        lambda path, device="cpu": PredictsByHand())
+    scores = request.getfixturevalue("tmp_path") / "youtube_dev.json"
+    monkeypatch.setattr(sys, "argv", ["eval_youtube.py", "--run", "by_hand-2026.11.25", "--set",
+                                      "raw", "--decode", option, "--json", str(scores)])
+    eval_youtube.main()
+    result = json.loads(scores.read_text())["raw"]
+    assert (result["iou"], result["percentage"]) == (
+        pytest.approx(YOUTUBE_SCORES[result["decode"]][0]), YOUTUBE_SCORES[result["decode"]][1])
+    assert f"decoder {result['decode']}" in capsys.readouterr().out
+    return result["decode"]
+
+
+def used_by_plot_segmentation(option, request, monkeypatch, capsys) -> str:
+    from experiments import plot_segmentation
+
+    request.getfixturevalue("youtube_clip")
+    folder = run_folder("by_hand-2026.11.25")
+    monkeypatch.setattr(plot_segmentation, "load_checkpoint",
+                        lambda path, device="cpu": PredictsByHand())
+    monkeypatch.setattr(sys, "argv", ["plot_segmentation.py", "--run", "by_hand-2026.11.25",
+                                      "--datasets", "youtube_25", "--clips", "1", "--zoom-clips",
+                                      "0", "--device", "cpu", "--decode", option])
+    plot_segmentation.main()
+    # the figure is written, and beside it the data it was drawn from
+    assert (folder / "segments_youtube_25_phrase_120s.png").exists()
+    record = json.loads((folder / "segments_youtube_25_phrase_120s.json").read_text())[0]
+    assert bounds(record["pred"]["phrase"]) == pytest.approx(
+        in_seconds(PREDICTED_SEGMENTS[record["decode"]]))
+    return record["decode"]
+
+
+def used_by_train(option, request, monkeypatch, capsys) -> str:
+    from experiments import train
+
+    request.getfixturevalue("project")
+
+    def asked(weighting, decoder):
+        raise Reached(decoder)
+
+    monkeypatch.setattr(train, "decoder_warning", asked)
+    with pytest.raises(Reached) as reached:
+        start_main(monkeypatch, "--decode", option)
+    return reached.value.args[0]
+
+
+USED_BY = {"score": used_by_score, "redecode": used_by_redecode,
+           "predict_dgs_2026": used_by_predict, "eval_youtube": used_by_eval_youtube,
+           "plot_segmentation": used_by_plot_segmentation, "train": used_by_train}
+
+
+@needs(*UPSTREAM, "matplotlib")
+@pytest.mark.parametrize("script", list(USED_BY))
+@pytest.mark.parametrize("option, expected", [("2023", "b-honouring"),
+                                              ("upstream", "b-ignoring")])
+def test_every_script_runs_with_the_earlier_names(script, option, expected, request,
+                                                  monkeypatch, capsys):
+    """`--decode 2023` and `--decode upstream` in each script that takes `--decode`.
+
+    Each script is run, on inputs written by hand, and what it wrote or printed
+    says which decoder it used: the one of today that the earlier name stands for.
+    """
+    assert USED_BY[script](option, request, monkeypatch, capsys) == expected
 
 
 # --- no script decodes on its own -------------------------------------------------------
