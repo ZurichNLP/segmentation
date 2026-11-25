@@ -1309,7 +1309,7 @@ def test_every_script_runs_with_the_earlier_names(script, option, expected, requ
     assert USED_BY[script](option, request, monkeypatch, capsys) == expected
 
 
-# --- no script decodes on its own -------------------------------------------------------
+# --- only metrics/ names the two decoding functions ---------------------------------------
 
 #: The two functions that turn argmax labels into segments. Only `metrics/` may
 #: name them in code: every other file takes a decoder from `metrics.decoders`.
@@ -1363,8 +1363,15 @@ def test_the_scan_reads_code_only_and_these_two_functions_only(source):
     assert decoding_functions_named(source) == []
 
 
-def test_no_script_decodes_on_its_own():
-    """Outside `metrics/` and the tests, no file of the project names a decoding function."""
+def test_no_file_outside_metrics_names_a_decoding_function():
+    """Outside `metrics/` and the tests, no file of the project names a decoding function.
+
+    That is what is checked: the two names, `bio_to_segments` and
+    `likeliest_probs_to_segments`, in the code of each file. It keeps a script
+    from calling one of them in place of a decoder of `metrics.decoders`. A
+    script that wrote a decoding rule of its own, under another name, would not
+    be found.
+    """
     from tests.project_files import ROOT, project_files
 
     scanned = [name for name in project_files(".py")
