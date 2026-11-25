@@ -123,9 +123,9 @@ The 2026 shipped checkpoint is the reference, not a row we produced.
 | `05_dgs_w1-5-1_s42` | as above, weights 1,5,1 | **0.594** | **0.813** | 0.523 | **0.859** | **0.559** | **0.581** | **0.908** | 0.488 | **0.511** | 0.350 |
 | `05_dgs_w1-20-1_s42` | as above, weights 1,20,1 | 0.529 | 0.714 | **0.611** | 1.228 | 0.492 | 0.567 | 0.890 | **0.818** | 1.502 | **0.352** |
 | `05_dgs_w2-80-1_s42` | as above, weights 2,80,1 | 0.436 | 0.612 | 0.573 | 1.328 | 0.387 | 0.545 | 0.835 | 0.798 | 3.698 | 0.123 |
-| *— repeats of earlier rows, B-ignoring decoder —* | | | | | | | | | | | |
-| `04_dgs_like_00_s42` | recipe of `00_2026_baseline`, no class weights | **0.562** | **0.821** | **0.607** | 1.092 | **0.514** | 0.526 | **0.907** | **0.823** | **0.884** | 0.238 |
-| `04_dgs_noweights_nodrop_video_s42` | recipe of `01_basic_lr1e-3`, no class weights, no early stopping | 0.523 | 0.807 | 0.559 | **1.083** | 0.428 | **0.538** | 0.902 | 0.818 | 1.318 | **0.314** |
+| *— recipes of earlier rows, no class weights, B-honouring decoder —* | | | | | | | | | | | |
+| `04_dgs_like_00_s42` | recipe of `00_2026_baseline` | **0.562** | **0.821** | **0.134** | **0.206** | **0.231** | 0.526 | **0.907** | 0.005 | 0.004 | 0.005 |
+| `04_dgs_noweights_nodrop_video_s42` | recipe of `01_basic_lr1e-3` | 0.523 | 0.807 | 0.035 | 0.055 | 0.081 | **0.538** | 0.902 | **0.037** | **0.035** | **0.032** |
 
 Bold marks the best within each group; `%` is best nearest **1**. Predictions live in `experiments/predictions/` (dev), kept apart from `benchmark/predictions/` (test) so the two can never be scored together.
 
@@ -149,13 +149,13 @@ At 3e-6 and below the model never improved past its first validation — best ep
 
 ### Class weights
 
-Four runs differing only in `--class-weights`, seed 42, with the defaults since 2026-09-15. They are scored with the B-honouring decoder, so they do not compare with the rows above.
+Four runs differing only in `--class-weights`, seed 42, with the defaults since 2026-09-15 and frame-uniform sampling. They are scored with the B-honouring decoder, so they do not compare with the rows above.
 
-**The weight of B decides how many segments come out.** Sign `%` goes from 0.86 with weight 5 to 1.33 with weight 80, and phrase `%` from 0.51 to 3.70. The inverse weights put B at 49 for signs and 269 for phrases, and give phrase `%` 4.07. Weight 5 has the best sign mF1S and the lowest IoU: it predicts too few segments.
+**More weight on B gives more segments**, in these single-seed runs. Sign `%` goes from 0.86 with weight 5 to 1.33 with weight 80, and phrase `%` from 0.51 to 3.70. The inverse weights put B at 49 for signs and 269 for phrases, and give phrase `%` 4.07. Weight 5 has the best sign mF1S and the lowest IoU: it predicts too few segments.
 
 ### Repeats of earlier rows
 
-`00_2026_baseline` and `01_basic_lr1e-3` trained without class weights and were scored with the B-ignoring decoder. Neither is the default today, so the repeats pass `--class-weights none` and are scored with `--decode upstream`. Their checkpoint was still selected by `validation_mean_mf1s` under the B-honouring decoder, at step 3,078 of 9,500 and 2,570 of 5,000, which is not how the earlier rows were selected. They use our fps augmentation with tempo stretch and no early stopping. One seed each.
+`00_2026_baseline` and `01_basic_lr1e-3` trained without class weights and were scored with the B-ignoring decoder. The repeats train with their recipes (`--class-weights none`, `--sampling video`), with our fps augmentation with tempo stretch and no early stopping, and are scored like every run of ours, with the B-honouring decoder. **Without class weights that decoder finds few segments**: sign IoU is 0.134 and 0.035, and phrase mF1S is 0.005 and 0.032. So these rows do not compare with `00` and `01`. One seed each.
 
 ## Pretraining on YouTube
 
@@ -199,7 +199,7 @@ All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twi
 
 `step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run so far selected between 8k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
 
-Row 11 repeats row 10; bold marks cover rows 1–10.
+Row 11 repeats row 10, most likely with the same seed (`--seed` defaults to 42), so the gap between them is run-to-run spread. Bold marks cover rows 1–10.
 
 **Defaults since 2026-09-15 are row 9's recipe**: `--fps-aug on`, `--tempo-stretch on`, frame dropout 0.15, body-part dropout 0.1 and attention dropout 0.1, in both `train.py` and `pretrain_youtube.slurm`. Rows 1–9 each spell out what they turned on, so they read the same as before; any run launched after this without those flags gets the recipe.
 
