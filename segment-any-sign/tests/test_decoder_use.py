@@ -694,3 +694,69 @@ def test_every_script_takes_the_earlier_names_too(script, monkeypatch, capsys):
     message = capsys.readouterr().err
     for name in ("b-honouring", "b-ignoring", "i-runs-kept", "2023", "upstream"):
         assert name in message
+
+
+# --- no script decodes on its own -------------------------------------------------------
+
+#: The two functions that turn argmax labels into segments. Only `metrics/` may
+#: name them in code: every other file takes a decoder from `metrics.decoders`.
+#: The 2023 function with thresholds, `probs_to_segments`, is another matter: it
+#: reads probabilities, and the scripts of the 2023 model call it.
+DECODING_FUNCTIONS = {"bio_to_segments", "likeliest_probs_to_segments"}
+
+
+def decoding_functions_named(source: str) -> list[str]:
+    """`line: name` for each place where the code of `source` names such a function.
+
+    An import, a call or any other use counts. A comment or a docstring that
+    mentions the name does not: only the code is read.
+    """
+    import ast
+
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Name):
+            name = node.id
+        elif isinstance(node, ast.Attribute):
+            name = node.attr
+        elif isinstance(node, ast.alias):
+            name = node.name.rsplit(".", 1)[-1]
+        else:
+            continue
+        if name in DECODING_FUNCTIONS:
+            found.append(f"{node.lineno}: {name}")
+    return sorted(found)
+
+
+@pytest.mark.parametrize("source", [
+    "from metrics import bio_to_segments\n",
+    "segments = bio_to_segments(labels, b=2, i=3)\n",
+    ("import sign_language_segmentation.metrics as upstream\n"
+     "segments = upstream.likeliest_probs_to_segments(probs)\n"),
+    "from sign_language_segmentation.metrics import likeliest_probs_to_segments as decode\n",
+    "decode = metrics.bio_to_segments\n",
+])
+def test_the_scan_finds_a_decoding_function_in_code(source):
+    assert decoding_functions_named(source)
+
+
+@pytest.mark.parametrize("source", [
+    '"""Segments come from bio_to_segments."""\n',
+    "# not likeliest_probs_to_segments: that one never looks at B\nx = 1\n",
+    "from metrics import get_decoder\nsegments = get_decoder(name).decode(labels)\n",
+    "segments = probs_to_segments(probs, 60, 50)\n",
+])
+def test_the_scan_reads_code_only_and_these_two_functions_only(source):
+    assert decoding_functions_named(source) == []
+
+
+def test_no_script_decodes_on_its_own():
+    """Outside `metrics/` and the tests, no file of the project names a decoding function."""
+    from tests.project_files import ROOT, project_files
+
+    scanned = [name for name in project_files(".py")
+               if not name.startswith(("metrics/", "tests/"))]
+    assert scanned, "no file was read"
+    offenders = {name: found for name in scanned
+                 if (found := decoding_functions_named((ROOT / name).read_text()))}
+    assert offenders == {}
