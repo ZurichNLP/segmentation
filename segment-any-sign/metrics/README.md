@@ -53,7 +53,7 @@ A model gives one label for each frame, and the segment metrics need segments. A
 |---|---|---|
 | `b-honouring` | `BHonouring` | a segment opens only on a B (`bio_to_segments`); a run of I without a B gives no segment |
 | `b-ignoring` | `BIgnoring` | any run of labels that are not O is one segment; B is not read |
-| `i-runs-kept` | `IRunsKept` | a B opens a segment and closes the one that is open, an O closes it, and a run of I without a B is a segment too |
+| `i-runs-kept` | `IRunsKept` | a B opens a segment and closes the one that is open, where a run of B is one boundary; an O closes it; and a run of I without a B is a segment too |
 
 `iou`, `percentage` and `mf1s` depend on the decoder; the two frame F1s do not. `2023` and `upstream` are the earlier names of the first two, and are still read. `choose_decoder` is the order in which a decoder is found: the name given in that run, then the name stored with the model, then `b-honouring`.
 

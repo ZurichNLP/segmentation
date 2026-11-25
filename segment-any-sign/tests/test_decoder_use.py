@@ -1056,7 +1056,8 @@ def test_plot_draws_the_segments_of_the_decoder_of_the_order(stored, given, expe
     assert [record["decode"] for record in records] == [expected]
     assert bounds(records[0]["pred"]["phrase"]) == pytest.approx(
         in_seconds(PREDICTED_SEGMENTS[expected]))
-    # the row beside it stays the b-ignoring one, whatever the decoder of the row "ours"
+    # the b-ignoring segments, which are counted in the printed summary and not
+    # drawn, are the same whatever the decoder of the row "ours"
     assert bounds(records[0]["pred_upstream"]["phrase"]) == pytest.approx(
         in_seconds(PREDICTED_SEGMENTS["b-ignoring"]))
 

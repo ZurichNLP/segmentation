@@ -22,8 +22,10 @@ annotations the 2023 run uses. Everything below that is the 2026 model's own:
     threshold decoding was tried and rejected, so unlike the 2023 row this one
     has no `b/o` to report. How the argmax labels become segments is the
     decoder, one of [`../metrics/decoders.py`](../metrics/decoders.py):
-    `b-honouring` opens a segment only on a B (`metrics.bio_to_segments`, the
-    2023 code at argmax: a B closes the open segment and opens the next);
+    `b-honouring` opens a segment only on a B (`metrics.bio_to_segments`: a B
+    closes the open segment and opens the next; it equals the 2023 code at
+    argmax only in a clip that has a B, since that code decodes a clip without
+    B from I alone);
     `b-ignoring` never inspects B and merges any run of non-O (the rule of
     upstream's `likeliest_probs_to_segments`, which the shipped model is decoded
     with), so two touching segments can only be counted as one while the gold

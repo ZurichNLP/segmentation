@@ -28,7 +28,7 @@ python benchmark/predict_dgs_2026.py --split test
 python benchmark/score.py benchmark/predictions/*.json
 ```
 
-`predict_dgs_2026.py` decodes with the decoder named by `--decode`, else with the one kept in the checkpoint (a checkpoint of ours keeps the decoder of its training run), else with `b-honouring`. The shipped model, which is what runs without `--model`, keeps `b-ignoring`. The prediction file names its decoder under `decode`.
+`predict_dgs_2026.py` decodes with the decoder named by `--decode`, else with the one kept in the checkpoint (a checkpoint of ours keeps the decoder of its training run), else with `b-honouring`. The shipped model, which is what runs without `--model`, keeps no decoder, since its `config.json` is upstream's: the script takes `b-ignoring` for it, the decoder it ships with. The prediction file names its decoder under `decode`.
 
 `score.py` scores the segments stored in a prediction file. With `--decode <name>` it scores the stored frame labels instead, decoded again with that [decoder](../metrics/README.md#decoders), so one file serves every decoder: `python benchmark/score.py experiments/predictions/05_dgs_w1-5-1_s42.json --decode i-runs-kept`. The file is not changed, and the row names the decoder. It is for a file of `predict_dgs_2026.py`, whose segments were decoded from its stored labels. A file whose `thresholds` are not empty is refused: `predict_dgs_2023.py` decodes its segments from the probabilities with thresholds and stores only the argmax as labels, so `--decode` must not be pointed at `benchmark/predictions/*.json`.
 

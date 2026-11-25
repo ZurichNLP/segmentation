@@ -123,10 +123,12 @@ from benchmark.predict_dgs_2026 import load_checkpoint  # noqa: E402,F401
 def _spans(decoder, labels) -> list[tuple[int, int]]:
     """Frame labels in our ids to spans `(first frame, one past the last)`.
 
-    `decoder` is one of `../metrics/decoders.py`. The figure draws two rows from
-    the same labels: "ours" with the decoder of the run, and beside it the
-    `b-ignoring` one, which never looks at B and merges any run that is not O,
-    so that the two can be compared at a glance.
+    `decoder` is one of `../metrics/decoders.py`. `collect` calls this twice on
+    the same labels. With the decoder of the run it gives the row "ours" of the
+    figure. With `b-ignoring`, which never looks at B and merges any run that
+    is not O, it gives `pred_upstream`: those segments are not drawn. They are
+    counted in the summary that `collect` prints, where the `%` of both stand
+    side by side, and they are kept in the cached records.
     """
     return [(s["start"], s["end"] + 1) for s in decoder.decode(labels)]
 
@@ -321,7 +323,8 @@ def collect(model: "Path | object", dataset: str, clips: int, device: str,
                     torch.from_numpy(gold.astype("int64")))], fps)
             labels = [to_ours.get(int(value), 0) for value in bios[upstream]]
             record["pred"][ours] = _to_seconds(_spans(decoder, labels), fps)
-            # the same labels as the shipped model is decoded, for comparison
+            # the same labels as the shipped model is decoded: counted in the
+            # summary below, and not drawn
             record["pred_upstream"][ours] = _to_seconds(
                 _spans(DECODERS["b-ignoring"], labels), fps)
         records.append(record)

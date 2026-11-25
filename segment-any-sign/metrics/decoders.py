@@ -9,8 +9,9 @@ F1 does not. Every script that decodes takes its decoder from here, by name.
   * `b-ignoring` (`BIgnoring`): any run of labels that are not O is one segment.
     B is not read. This is the rule of upstream's `likeliest_probs_to_segments`.
   * `i-runs-kept` (`IRunsKept`): the runs of the B-ignoring decoder, cut at a B.
-    A B opens a segment and closes the one that is open, an O closes it, and a
-    run of I with no B before it is a segment too.
+    A B opens a segment and closes the one that is open, where a run of B is
+    one boundary; an O closes it; and a run of I with no B before it is a
+    segment too.
 
 Labels are ours: `0 = O`, `1 = B`, `2 = I`. A caller that holds upstream's ids
 (`UNK = 0`, `O = 1`, `B = 2`, `I = 3`) remaps them first, UNK to O. A label

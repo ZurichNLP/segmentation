@@ -31,11 +31,13 @@ with augmentation applied, while validation runs whole videos with none. Expect
 train to look easier. The gap between the curves is still the useful signal — it
 is where overfitting shows up.
 
-Cost: none at validation. Upstream runs two forward passes per validation batch
-and ours would be a third, so instead the forward is computed once and cached for
-all three — which makes validation *cheaper* than it was before these metrics
-existed. Training pays one extra forward every `metrics_every_n_steps` steps
-(9, about once per epoch at batch 64).
+Cost of the forward passes: none at validation. Upstream runs two forward passes
+per validation batch and ours would be a third, so instead the forward is computed
+once and cached for all three — which makes validation one forward pass *cheaper*
+than it was before these metrics existed. Training pays one extra forward every
+`metrics_every_n_steps` steps (9, about once per epoch at batch 64). Scoring is
+not free: the matching behind mF1S is the expensive part of a validation, and it
+is paid for each decoder (see the paragraph on the other decoders below).
 
 **The other decoders are scored at validation too**: IoU, `%` and mF1S of each
 decoder that is not the decoder of the run, logged for each validation set under
