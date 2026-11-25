@@ -30,7 +30,7 @@ python benchmark/score.py benchmark/predictions/*.json
 
 `predict_dgs_2026.py` decodes with the decoder named by `--decode`, else with the one kept in the checkpoint (a checkpoint of ours keeps the decoder of its training run), else with `b-honouring`. The shipped model, which is what runs without `--model`, keeps `b-ignoring`. The prediction file names its decoder under `decode`.
 
-`score.py` scores the segments stored in a prediction file. With `--decode <name>` it scores the stored frame labels instead, decoded again with that [decoder](../metrics/README.md#decoders), so one file serves every decoder: `python benchmark/score.py benchmark/predictions/*.json --decode i-runs-kept`. The file is not changed, and the row names the decoder.
+`score.py` scores the segments stored in a prediction file. With `--decode <name>` it scores the stored frame labels instead, decoded again with that [decoder](../metrics/README.md#decoders), so one file serves every decoder: `python benchmark/score.py benchmark/predictions/*.json --decode i-runs-kept`. The file is not changed, and the row names the decoder. `redecode.py <file> --decode <name>` does change the file: it writes the stored segments again from the stored labels and sets `decode`, and nothing else. It is for a row whose decoder changes, so that the file alone says how its row is scored.
 
 Clips, filters and gold come from [`../datasets/public_dgs_corpus/load.py`](../datasets/public_dgs_corpus/load.py) for every model: `iter_clips` reads the TFDS build at 25fps, `iter_clips_native` the archived `.pose` originals at 50fps. Each model gets the one it was developed against. Predictions land in `predictions/*.json` as segments plus RLE'd frame labels.
 

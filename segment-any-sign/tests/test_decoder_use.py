@@ -168,6 +168,119 @@ def test_out_file_records_the_decoder(prediction_file, tmp_path, monkeypatch, ca
     assert json.loads(out.read_text())[0]["decode"] == "i-runs-kept"
 
 
+# --- redecode.py: write the segments of a file again ---------------------------------
+
+#: the segments each decoder gives from the labels of `CLIP`, sign then phrase
+CLIP_SEGMENTS = {
+    "b-honouring": {"sign": spans((5, 6)), "phrase": spans((1, 3), (4, 6))},
+    "b-ignoring": {"sign": spans((1, 3), (5, 6)), "phrase": spans((1, 6))},
+    "i-runs-kept": {"sign": spans((1, 3), (5, 6)), "phrase": spans((1, 3), (4, 6))},
+}
+
+
+def run_redecode(monkeypatch, capsys, *arguments) -> str:
+    from benchmark import redecode
+
+    monkeypatch.setattr(sys, "argv", ["redecode.py", *[str(argument) for argument in arguments]])
+    redecode.main()
+    return capsys.readouterr().out
+
+
+def without_segments(payload: dict) -> dict:
+    """The file without the two things that redecode.py may change."""
+    rest = {key: value for key, value in payload.items() if key not in ("decode", "clips")}
+    rest["clips"] = [{key: value for key, value in clip.items() if key != "pred"}
+                     for clip in payload["clips"]]
+    return rest
+
+
+@pytest.mark.parametrize("option, name", [("b-ignoring", "b-ignoring"),
+                                          ("b-honouring", "b-honouring"),
+                                          ("i-runs-kept", "i-runs-kept"),
+                                          ("upstream", "b-ignoring")])
+def test_redecode_writes_the_segments_and_the_name_and_nothing_else(
+        prediction_file, option, name, monkeypatch, capsys):
+    before = json.loads(prediction_file.read_text())
+    run_redecode(monkeypatch, capsys, prediction_file, "--decode", option)
+
+    text = prediction_file.read_text()
+    after = json.loads(text)
+    assert after["decode"] == name
+    assert after["clips"][0]["pred"] == CLIP_SEGMENTS[name]
+    # the labels, the gold and every other field are as they were, in the same order
+    assert without_segments(after) == without_segments(before)
+    assert list(after) == list(before)
+    assert list(after["clips"][0]) == list(before["clips"][0])
+    # and the file is laid out as predict_dgs_2026.py writes it
+    assert text == json.dumps(after, indent=2)
+
+
+def test_redecoded_file_scores_like_score_with_decode(prediction_file, monkeypatch, capsys):
+    from benchmark.score import score_file
+    from metrics import get_decoder
+
+    expected = score_file(prediction_file, decoder=get_decoder("b-ignoring"))["levels"]
+    run_redecode(monkeypatch, capsys, prediction_file, "--decode", "b-ignoring")
+    # with no option now: the file alone says how it is scored
+    assert score_file(prediction_file)["levels"] == expected
+
+
+def test_redecode_says_what_changed_and_a_second_time_changes_nothing(prediction_file,
+                                                                      monkeypatch, capsys):
+    first = run_redecode(monkeypatch, capsys, prediction_file, "--decode", "b-ignoring")
+    assert "2023 -> b-ignoring" in first and "2 of 2" in first
+    written = prediction_file.read_bytes()
+
+    second = run_redecode(monkeypatch, capsys, prediction_file, "--decode", "b-ignoring")
+    assert "b-ignoring -> b-ignoring" in second and "0 of 2" in second
+    assert prediction_file.read_bytes() == written
+
+
+def test_redecode_dry_run_writes_nothing(prediction_file, monkeypatch, capsys):
+    before = prediction_file.read_bytes()
+    out = run_redecode(monkeypatch, capsys, prediction_file, "--decode", "b-ignoring",
+                       "--dry-run")
+    assert "2023 -> b-ignoring" in out and "2 of 2" in out and "not written" in out
+    assert prediction_file.read_bytes() == before
+
+
+def test_redecode_adds_the_name_to_a_file_that_has_none(prediction_file, monkeypatch, capsys):
+    # the files of September 2026: no `decode`, segments from upstream's function
+    payload = json.loads(prediction_file.read_text())
+    del payload["decode"]
+    prediction_file.write_text(json.dumps(payload, indent=2))
+
+    out = run_redecode(monkeypatch, capsys, prediction_file, "--decode", "i-runs-kept")
+    after = json.loads(prediction_file.read_text())
+    assert "none -> i-runs-kept" in out
+    assert after["decode"] == "i-runs-kept"
+    # among the fields of the file, before the clips, where the predict script puts it
+    assert list(after)[-2:] == ["decode", "clips"]
+
+
+def test_redecode_refuses_a_file_it_would_lay_out_anew(prediction_file, monkeypatch, capsys):
+    # written without indent: writing it back would change every line of it
+    compact = json.dumps(json.loads(prediction_file.read_text()))
+    prediction_file.write_text(compact)
+
+    with pytest.raises(SystemExit) as stop:
+        run_redecode(monkeypatch, capsys, prediction_file, "--decode", "b-ignoring")
+    assert "laid out" in str(stop.value)
+    assert prediction_file.read_text() == compact
+
+
+def test_redecode_refuses_a_file_without_frame_labels(prediction_file, monkeypatch, capsys):
+    payload = json.loads(prediction_file.read_text())
+    del payload["clips"][0]["pred_bio"]
+    prediction_file.write_text(json.dumps(payload, indent=2))
+    before = prediction_file.read_bytes()
+
+    with pytest.raises(SystemExit) as stop:
+        run_redecode(monkeypatch, capsys, prediction_file, "--decode", "b-ignoring")
+    assert "no frame labels" in str(stop.value)
+    assert prediction_file.read_bytes() == before
+
+
 # --- training: the decoder of a run, and where it is kept -----------------------
 
 #: a model small enough to build in a test; the arguments are upstream's
