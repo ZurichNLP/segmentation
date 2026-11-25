@@ -82,6 +82,29 @@ DETAIL_CAPTION = (
     "gold spans, not the first.")
 
 
+def reuse_note(given: str | None, records: list[dict]) -> str | None:
+    """One line for `--reuse` when `--decode` asks for another decoder than the cache has.
+
+    With `--reuse` nothing is decoded: the figure is drawn from the cached
+    predictions, whose segments were made by the decoder each record names
+    (`b-honouring` for a cache written before the decoder was recorded). So a
+    `--decode` that names another decoder has no effect, and the line says so.
+    None when `--decode` was not given, or names the decoder of the cache.
+    """
+    if not given:
+        return None
+    from metrics import get_decoder
+
+    wanted = get_decoder(given).name
+    cached = next((record["decode"] for record in records if record.get("decode")),
+                  "b-honouring")
+    if wanted == cached:
+        return None
+    return (f"note: --decode {wanted} is not applied. With --reuse the figure is drawn "
+            f"from the cached predictions, which were decoded with {cached}; run "
+            f"without --reuse to decode again.")
+
+
 def newest_checkpoint(run_dir: Path, which: str = "best") -> Path:
     """Newest matching checkpoint. Two runs sharing a directory produce
     `best.ckpt` and `best-v1.ckpt`; picking by name alone silently scores the
@@ -375,6 +398,8 @@ def main() -> None:
             if cached and cached[0].get("units") == "seconds":
                 records = cached
                 print(f"reusing {len(records)} cached predictions from {cache}")
+                if note := reuse_note(args.decode, records):
+                    print(note)
             else:
                 print(f"ignoring stale cache {cache} (pre-seconds format)")
         if records is None:

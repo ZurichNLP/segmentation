@@ -1064,6 +1064,65 @@ def test_caption_of_the_row_ours_names_its_decoder():
     assert caption_of("gold", [{"decode": "b-ignoring"}]) == caption_of("gold", [{}])
 
 
+@pytest.mark.parametrize("given, cached, said", [
+    (None, {"decode": "b-ignoring"}, False),            # no --decode: nothing was asked
+    ("b-ignoring", {"decode": "b-ignoring"}, False),
+    ("upstream", {"decode": "b-ignoring"}, False),      # the same decoder by its earlier name
+    ("i-runs-kept", {"decode": "b-ignoring"}, True),
+    ("2023", {}, False),                                # a cache from before: b-honouring
+    ("b-ignoring", {}, True),
+])
+def test_reuse_note_only_when_decode_asks_for_another_decoder_than_the_cache(given, cached, said):
+    from experiments.plot_segmentation import reuse_note
+    from metrics import get_decoder
+
+    note = reuse_note(given, [cached])
+    if not said:
+        assert note is None
+        return
+    # one line that names what was asked, what the cached data has, and what to do
+    assert "\n" not in note
+    assert f"--decode {get_decoder(given).name}" in note
+    assert cached.get("decode", "b-honouring") in note
+    assert "without --reuse" in note
+
+
+@needs("matplotlib")
+@pytest.mark.parametrize("options, notes", [
+    (["--decode", "i-runs-kept"], 1),
+    (["--decode", "2023"], 0),        # what the cached data was decoded with
+    ([], 0),
+])
+def test_plot_with_reuse_says_when_decode_is_not_what_the_cache_holds(options, notes,
+                                                                      monkeypatch, capsys):
+    """`plot_segmentation.py --reuse` itself, on figure data written by hand."""
+    import paths
+    from experiments import plot_segmentation
+
+    run = "by_hand-2026.11.25"
+    run_dir = paths.output("dist") / run
+    run_dir.mkdir(parents=True)
+    cache = run_dir / "segments_dgs_corpus_phrase_120s.json"
+    cache.write_text(json.dumps([{
+        "id": "by_hand", "fps": 50.0, "frames": 9, "units": "seconds", "pose_path": "none",
+        "decode": "b-honouring",
+        "gold": {"sign": [], "phrase": [[0.08, 0.12]]},
+        "pred": {"sign": [], "phrase": [[0.08, 0.12], [0.12, 0.16]]},
+        "pred_upstream": {"sign": [], "phrase": [[0.02, 0.06], [0.08, 0.16]]}}]))
+    before = cache.read_bytes()
+
+    monkeypatch.setattr(sys, "argv", ["plot_segmentation.py", "--run", run, "--datasets",
+                                      "dgs_corpus", "--reuse", "--zoom-clips", "0", *options])
+    plot_segmentation.main()
+
+    printed = capsys.readouterr().out
+    assert "reusing 1 cached predictions" in printed
+    assert printed.count("is not applied") == notes
+    # the figure is drawn from the cached data either way, and the data is left alone
+    assert (run_dir / "segments_dgs_corpus_phrase_120s.png").exists()
+    assert cache.read_bytes() == before
+
+
 @pytest.mark.parametrize("script", ["train", "eval_youtube", "plot_segmentation"])
 def test_every_script_takes_the_earlier_names_too(script, monkeypatch, capsys):
     """`--decode 2023` and `--decode upstream` are read wherever `--decode` exists."""
