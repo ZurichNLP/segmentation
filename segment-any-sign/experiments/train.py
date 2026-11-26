@@ -331,18 +331,18 @@ def main() -> None:
     # metrics without touching upstream code or copying its training loop.
     from experiments.validation_metrics import ValidationMetricsModel
     upstream_train.PoseTaggingModel = ValidationMetricsModel
-    # With --finetune_from, upstream's loader builds the model with
-    # load_from_checkpoint on its own name, given every model option of the run.
-    # On ours, it is the model of a run without the option, with every tensor of
-    # the checkpoint. What identifies the checkpoint goes into the record.
+    # --finetune_from: upstream's loader builds that model under its own name, so
+    # it gets ours too. See "Starting from a checkpoint" in README.md
+    stored_decoder = None
     if args.finetune_from:
-        from benchmark.predict_dgs_2026 import model_file
+        from benchmark.predict_dgs_2026 import model_file, stored_decode
 
         import sign_language_segmentation.bin as upstream_bin
         from experiments.run_record import source_of
 
         upstream_bin.PoseTaggingModel = ValidationMetricsModel
         args.finetune_source = source_of(model_file(args.finetune_from))
+        stored_decoder = stored_decode(args.finetune_from)
 
     # Validate on a list of datasets, not one. Upstream builds a single DEV
     # loader; wrapping `get_dataloader` turns that call into one loader per named
@@ -582,9 +582,7 @@ def main() -> None:
     # The decoder of the run: --decode, else the one kept with the checkpoint of
     # --finetune_from, else the default, b-honouring. The person who launches the
     # run chooses it; nothing here derives it from the recipe.
-    from benchmark.predict_dgs_2026 import stored_decode
-    decoder = set_decoder(args, mine.decode,
-                          stored_decode(args.finetune_from) if args.finetune_from else None)
+    decoder = set_decoder(args, mine.decode, stored_decoder)
 
     report_effective_config(args, mine, _dated_run_name(args.run_name))
     # said once, after the configuration it is about; it changes and stops nothing
