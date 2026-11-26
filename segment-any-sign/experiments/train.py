@@ -367,7 +367,7 @@ def main() -> None:
     # without it Lightning requires the interval to fit inside one epoch, which
     # 100 steps does not on DGS (10 steps per epoch). Wrapped in a shim rather
     # than mutating the pytorch_lightning module itself.
-    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
+    from experiments.last_checkpoint import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
 
     class _TrainerShim:
         def __init__(self, module, extra):
@@ -387,6 +387,11 @@ def main() -> None:
             if extra_callbacks:
                 merged["callbacks"] = list(kwargs.get("callbacks") or []) + \
                     list(extra_callbacks)
+            # the same for plugins; one may be given alone, not in a list
+            upstream_plugins = kwargs.get("plugins") or []
+            if not isinstance(upstream_plugins, (list, tuple)):
+                upstream_plugins = [upstream_plugins]
+            merged["plugins"] = list(upstream_plugins) + list(self._extra.get("plugins") or [])
             return self._module.Trainer(*args, **merged)
 
     # Everything the user sets is in *gradient* steps. Lightning's
@@ -624,6 +629,8 @@ def main() -> None:
         callbacks.append(SampleScheduleCallback(mine.max_steps,
                                                 shape=mine.sample_schedule))
     trainer_extra["callbacks"] = callbacks
+    # every checkpoint, best.ckpt and last.ckpt, written whole (last_checkpoint.py)
+    trainer_extra["plugins"] = [WholeFileCheckpointIO()]
 
     # train() takes monitor_metric, so both ModelCheckpoint and EarlyStopping
     # follow it without patching anything

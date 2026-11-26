@@ -917,3 +917,41 @@ def test_main_has_last_ckpt_written_by_last_checkpoint_alone(project, monkeypatc
     assert Path(last.dirpath) == (Path("dist") / record["run_id"]).resolve()
     # Lightning runs it after upstream's callback, which it was given before
     assert trainer.callbacks.index(last) > trainer.callbacks.index(upstream)
+
+
+@needs(*UPSTREAM)
+def test_main_writes_every_checkpoint_of_the_run_whole(project, monkeypatch):
+    """The trainer of upstream's `train()` writes through WholeFileCheckpointIO.
+
+    A plugin that upstream would give the trainer is kept beside it.
+    """
+    import pytorch_lightning
+    from experiments.last_checkpoint import WholeFileCheckpointIO
+    from lightning_fabric.plugins.environments import LightningEnvironment
+    from pytorch_lightning.callbacks import ModelCheckpoint
+
+    built, real_trainer = {}, pytorch_lightning.Trainer
+
+    def trainer_given(*arguments, **options):
+        built["plugins"] = options.get("plugins")
+        return real_trainer(*arguments, **options)
+
+    monkeypatch.setattr(pytorch_lightning, "Trainer", trainer_given)
+
+    def training(monitor_metric):
+        import sign_language_segmentation.train as upstream_train
+
+        built["environment"] = LightningEnvironment()
+        built["trainer"] = upstream_train.pl.Trainer(
+            callbacks=[ModelCheckpoint(dirpath="dist/run", filename="best", save_top_k=1,
+                                       save_last=True, monitor=monitor_metric, mode="max")],
+            plugins=[built["environment"]], accelerator="cpu", logger=False, max_epochs=1,
+            enable_progress_bar=False)
+
+    start_training(monkeypatch, training=training)
+
+    trainer = built["trainer"]
+    assert isinstance(trainer.strategy.checkpoint_io, WholeFileCheckpointIO)
+    # Lightning was given upstream's plugin and ours
+    assert built["plugins"][0] is built["environment"]
+    assert [type(plugin) for plugin in built["plugins"]][1:] == [WholeFileCheckpointIO]

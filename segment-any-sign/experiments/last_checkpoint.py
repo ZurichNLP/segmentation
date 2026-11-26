@@ -1,4 +1,4 @@
-"""The last checkpoint of a run: `last.ckpt`, written again at every validation.
+"""How the two checkpoints of a run, `best.ckpt` and `last.ckpt`, are written.
 
 A run folder keeps two checkpoints. `best.ckpt` is written by upstream's
 ModelCheckpoint whenever the selection metric improves. `last.ckpt` is the run
@@ -33,6 +33,11 @@ kill also leaves Lightning's whole temporary copy in /tmp. A SIGTERM, from a
 time limit or `scancel`, does no harm: Lightning only notes it, and SLURM waits
 KillWait (200 s on that cluster) before it sends SIGKILL, so a write finishes.
 
+Upstream's ModelCheckpoint writes `best.ckpt` through the same copy, and as
+`last.ckpt` is no longer a copy of it, a kill there would lose the best model.
+So `train.py` gives the trainer `WholeFileCheckpointIO`, through which Lightning
+writes every checkpoint: to `<name>.part`, synced, then renamed over `<name>`.
+
 It is a ModelCheckpoint with nothing of its own to save, not a plain Callback,
 for the order. Lightning runs every ModelCheckpoint after all other callbacks,
 in the order they were given, so this one runs after upstream's, and
@@ -48,12 +53,35 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import torch
+from lightning_fabric.plugins.io.torch_io import TorchCheckpointIO
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.trainer.states import TrainerFn
 
 NAME = "last.ckpt"
 #: what a save writes first; renamed to NAME when it is whole
 PART = NAME + ".part"
+
+
+class WholeFileCheckpointIO(TorchCheckpointIO):
+    """Write a checkpoint to `<name>.part`, sync it, then rename it to `<name>`.
+
+    A kill at any moment leaves a whole file under that name, the old or the
+    new. `torch.save` is given a file object, as in TorchCheckpointIO, so the
+    bytes are the same as its.
+    """
+
+    def save_checkpoint(self, checkpoint: dict, path, storage_options=None) -> None:
+        if storage_options is not None:
+            raise TypeError(f"{type(self).__name__} takes no storage_options")
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        part = target.with_name(target.name + ".part")
+        with open(part, "wb") as handle:
+            torch.save(checkpoint, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(part, target)
 
 
 class LastCheckpoint(ModelCheckpoint):
