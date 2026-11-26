@@ -12,8 +12,6 @@ tests that need Lightning are marked with `needs` and skipped, with the
 missing packages named, where it is not installed.
 """
 
-from pathlib import Path
-
 import pytest
 
 from tests.test_locations import needs
