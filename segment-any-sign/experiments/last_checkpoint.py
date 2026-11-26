@@ -1,47 +1,25 @@
 """How the two checkpoints of a run, `best.ckpt` and `last.ckpt`, are written.
 
-A run folder keeps two checkpoints. `best.ckpt` is written by upstream's
-ModelCheckpoint whenever the selection metric improves. `last.ckpt` is the run
-at its last validation, so that a job that is killed leaves the weights of its
-last validation, and the end of a run can be read beside its best.
+`best.ckpt` is written by upstream's ModelCheckpoint when the selection metric
+improves. `last.ckpt` is the last validation, written again at each by
+`LastCheckpoint`, so that a job that is killed leaves the weights it reached.
+Upstream's `save_last` wrote `last.ckpt` only together with `best.ckpt`, as a
+copy of it, so `train.py` turns it off (`turn_off_save_last`).
 
-Upstream asks its ModelCheckpoint for `save_last=True`. In the Lightning of
-this project (2.6.6) that writes `last.ckpt` only at a step where a checkpoint
-was saved, so with `save_top_k=1` it was a copy of `best.ckpt`: in every run
-folder checked, the two held the same step and the same weights. `train.py`
-therefore turns that off (`turn_off_save_last`) and gives the trainer
-`LastCheckpoint`, so that one writer makes `last.ckpt`.
+Lightning saves a checkpoint to a file in /tmp and then moves it. Where /tmp
+is another mount than the run folder, as on the cluster, the move is a copy
+into the checkpoint, and a kill during it truncates the file. So `train.py`
+gives the trainer `WholeFileCheckpointIO`, through which Lightning writes
+every checkpoint: to `<name>.part`, synced, then renamed over `<name>`. A kill
+leaves both checkpoints whole, beside a `.part` that no reader matches. A
+SIGTERM, from a time limit or `scancel`, does no harm: Lightning only notes it,
+and SLURM waits KillWait (200 s on that cluster) before it sends SIGKILL, so a
+write finishes.
 
-Why not a second, stock ModelCheckpoint with `monitor=None`; measured on
-2026-11-26:
-
-  * Without a filename it writes a new name at every validation, from
-    `epoch=0-step=2.ckpt` to `epoch=1-step=12.ckpt` in a run of twelve steps,
-    and deletes the one before, so no `last*.ckpt` of a reader finds it.
-  * With `filename="last"` it writes `last.ckpt` in place. Lightning saves to a
-    file in /tmp and then moves it, and on the UZH cluster /tmp and /scratch
-    are different mounts, so the move is a copy into `last.ckpt` itself. A
-    SIGKILL during that copy left `last.ckpt` with 81,920 of 600,001,641 bytes,
-    which `torch.load` refuses ("failed finding central directory"), and the
-    checkpoint of the validation before was gone with it.
-
-`LastCheckpoint` writes `last.ckpt.part` and renames it over `last.ckpt`, which
-is atomic on one file system: the same kill left `last.ckpt` whole, with the
-validation before, beside a broken `last.ckpt.part`. No reader of a run folder
-matches the `.part`, and the next validation writes over it. Either way the
-kill also leaves Lightning's whole temporary copy in /tmp. A SIGTERM, from a
-time limit or `scancel`, does no harm: Lightning only notes it, and SLURM waits
-KillWait (200 s on that cluster) before it sends SIGKILL, so a write finishes.
-
-Upstream's ModelCheckpoint writes `best.ckpt` through the same copy, and as
-`last.ckpt` is no longer a copy of it, a kill there would lose the best model.
-So `train.py` gives the trainer `WholeFileCheckpointIO`, through which Lightning
-writes every checkpoint: to `<name>.part`, synced, then renamed over `<name>`.
-
-It is a ModelCheckpoint with nothing of its own to save, not a plain Callback,
-for the order. Lightning runs every ModelCheckpoint after all other callbacks,
-in the order they were given, so this one runs after upstream's, and
-`last.ckpt` keeps upstream's state of the same validation. A plain Callback
+`LastCheckpoint` is a ModelCheckpoint with nothing of its own to save, not a
+plain Callback, for the order. Lightning runs every ModelCheckpoint after all
+other callbacks, in the order they were given, so this one runs after
+upstream's, and `last.ckpt` keeps upstream's state of the same validation. A plain Callback
 runs before it: when the last validation was also the best, its `last.ckpt`
 said that the best score was the one before (0.2 where it was 0.3, in a
 check). The weights are the same either way; that state is what a run resumed
@@ -59,8 +37,6 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.trainer.states import TrainerFn
 
 NAME = "last.ckpt"
-#: what a save writes first; renamed to NAME when it is whole
-PART = NAME + ".part"
 
 
 class WholeFileCheckpointIO(TorchCheckpointIO):
@@ -88,26 +64,31 @@ class LastCheckpoint(ModelCheckpoint):
     """Write `last.ckpt` in `dirpath` at the end of every validation of a fit.
 
     It keeps the whole state of the training, optimizer included, not only the
-    weights.
+    weights. It is written whole by the trainer's `WholeFileCheckpointIO`, and a
+    fit without it is stopped.
     """
 
     def __init__(self, dirpath):
         # nothing of the parent's to save: no top-k checkpoints and no save_last
         super().__init__(dirpath=dirpath, save_top_k=0, save_last=False)
 
+    def setup(self, trainer, pl_module, stage) -> None:
+        super().setup(trainer, pl_module, stage)
+        if not isinstance(trainer.strategy.checkpoint_io, WholeFileCheckpointIO):
+            raise SystemExit(
+                "LastCheckpoint needs a trainer given WholeFileCheckpointIO in its "
+                "plugins: without it a kill during a write would truncate last.ckpt. "
+                "See experiments/last_checkpoint.py.")
+
     def on_validation_end(self, trainer, pl_module) -> None:
         if (trainer.sanity_checking or trainer.fast_dev_run
                 or trainer.state.fn != TrainerFn.FITTING):
             return
-        folder = Path(self.dirpath)
         # The whole state of the training: weights, optimizer, schedulers, loops
         # and callbacks, as upstream's ModelCheckpoint saves best.ckpt. Said
         # explicitly: left unset, Lightning saves the same and logs a line about
         # it at every validation.
-        trainer.save_checkpoint(folder / PART, weights_only=False)
-        if trainer.is_global_zero:
-            os.replace(folder / PART, folder / NAME)
-        trainer.strategy.barrier()
+        trainer.save_checkpoint(Path(self.dirpath) / NAME, weights_only=False)
 
 
 def turn_off_save_last(callbacks: list) -> ModelCheckpoint:

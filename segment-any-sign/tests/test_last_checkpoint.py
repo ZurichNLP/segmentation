@@ -90,7 +90,7 @@ def test_a_run_keeps_its_best_and_its_last_validation(metrics, best_step, best_s
     import logging
 
     import torch
-    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
+    from experiments.last_checkpoint import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
 
     # Lightning's own logger does not pass its records on to the root logger,
     # where caplog listens, so they are kept here
@@ -102,7 +102,8 @@ def test_a_run_keeps_its_best_and_its_last_validation(metrics, best_step, best_s
     callbacks = [upstream_checkpoint(tmp_path)]
     turn_off_save_last(callbacks)
     try:
-        model = train(tmp_path, metrics, callbacks + [LastCheckpoint(tmp_path)])
+        model = train(tmp_path, metrics, callbacks + [LastCheckpoint(tmp_path)],
+                      plugins=[WholeFileCheckpointIO()])
     finally:
         lightning.removeHandler(keep)
 
@@ -146,37 +147,30 @@ class TrainerThatSaves:
 
 
 @needs(*LIGHTNING)
-def test_a_save_replaces_last_ckpt_whole(tmp_path):
+def test_last_checkpoint_asks_the_trainer_for_the_whole_last_ckpt(tmp_path):
+    """The `.part` and the rename are the CheckpointIO's (see WholeFileCheckpointIO)."""
     from experiments.last_checkpoint import LastCheckpoint
 
-    (tmp_path / "last.ckpt").write_bytes(b"the validation before")
-    trainer = TrainerThatSaves(lambda path: Path(path).write_bytes(b"this validation"))
+    saved = []
+    trainer = TrainerThatSaves(saved.append)
     LastCheckpoint(tmp_path).on_validation_end(trainer, None)
 
-    assert (tmp_path / "last.ckpt").read_bytes() == b"this validation"
-    assert not (tmp_path / "last.ckpt.part").exists()
+    assert saved == [tmp_path / "last.ckpt"]
     # the whole state is asked for, not left to the default of Lightning
     assert trainer.options == [{"weights_only": False}]
 
 
 @needs(*LIGHTNING)
-def test_a_save_that_dies_midway_leaves_the_last_ckpt_before(tmp_path):
-    from experiments.last_checkpoint import LastCheckpoint
+def test_last_checkpoint_stops_a_fit_without_whole_file_io(tmp_path):
+    """Else last.ckpt would be written in place, and a kill could truncate it."""
+    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
 
-    def killed(path):
-        Path(path).write_bytes(b"half of th")
-        raise RuntimeError("killed")
-
-    (tmp_path / "last.ckpt").write_bytes(b"the validation before")
-    with pytest.raises(RuntimeError):
-        LastCheckpoint(tmp_path).on_validation_end(TrainerThatSaves(killed), None)
-
-    assert (tmp_path / "last.ckpt").read_bytes() == b"the validation before"
-    # what is left beside it is matched by no reader of a run folder
-    assert (tmp_path / "last.ckpt.part").read_bytes() == b"half of th"
-    assert [path.name for path in tmp_path.glob("best*.ckpt")] == []
-    assert [path.name for path in tmp_path.glob("last*.ckpt")] == ["last.ckpt"]
-    assert [path.name for path in tmp_path.glob("*.ckpt")] == ["last.ckpt"]
+    callbacks = [upstream_checkpoint(tmp_path)]
+    turn_off_save_last(callbacks)
+    with pytest.raises(SystemExit) as stop:
+        train(tmp_path, [0.1, 0.2], callbacks + [LastCheckpoint(tmp_path)])
+    assert "WholeFileCheckpointIO" in str(stop.value)
+    assert list(tmp_path.glob("*.ckpt*")) == []
 
 
 @needs(*LIGHTNING)
@@ -313,19 +307,25 @@ def dies_at_the_second_write_of(name: str):
 
 
 @needs(*LIGHTNING)
-def test_a_kill_while_best_ckpt_is_rewritten_leaves_the_best_before(tmp_path, monkeypatch):
-    """The case of the review: the best of step 2, then a better one at step 8."""
+@pytest.mark.parametrize("killed, best_step, last_step", [
+    # the case of the review: the best of step 2, then a better one at step 8
+    ("best.ckpt", 2, 6),
+    # the second write of last.ckpt, at step 4
+    ("last.ckpt", 2, 2),
+])
+def test_a_kill_during_a_write_leaves_both_checkpoints_whole(killed, best_step, last_step,
+                                                             tmp_path, monkeypatch):
     import torch
     from experiments.last_checkpoint import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
 
     callbacks = [upstream_checkpoint(tmp_path)]
     turn_off_save_last(callbacks)
-    monkeypatch.setattr(torch, "save", dies_at_the_second_write_of("best.ckpt"))
+    monkeypatch.setattr(torch, "save", dies_at_the_second_write_of(killed))
     with pytest.raises(RuntimeError):
         train(tmp_path, [0.3, 0.1, 0.2, 0.5], callbacks + [LastCheckpoint(tmp_path)],
               plugins=[WholeFileCheckpointIO()])
 
     best, last = stored(tmp_path / "best.ckpt"), stored(tmp_path / "last.ckpt")
-    assert best["global_step"] == 2 and best_score_inside(best) == pytest.approx(0.3)
-    assert last["global_step"] == 6                      # the validation before the kill
-    assert (tmp_path / "best.ckpt.part").exists()
+    assert best["global_step"] == best_step and best_score_inside(best) == pytest.approx(0.3)
+    assert last["global_step"] == last_step              # the validation before the kill
+    assert (tmp_path / f"{killed}.part").exists()
