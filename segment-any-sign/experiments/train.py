@@ -80,8 +80,9 @@ The full metric set from `../metrics/` is logged on **both** train and validatio
 under matching names, so W&B can overlay the two curves — see
 [`validation_metrics.py`](validation_metrics.py).
 
-Validation runs **every epoch** (upstream's default), and the best checkpoint
-maximises `validation_mean_mf1s` — see `--select-on`. A run folder keeps two
+Validation runs on a step schedule, every `--val-every` steps: by default 1% of
+the run, and at least once an epoch. The best checkpoint maximises
+`validation_mean_mf1s` — see `--select-on`. A run folder keeps two
 checkpoints: `best.ckpt`, written when that metric improves, and `last.ckpt`,
 the last validation, written again at every validation (`checkpoints.py`).
 

@@ -12,18 +12,20 @@ into the checkpoint, and a kill during it truncates the file. So `train.py`
 gives the trainer `WholeFileCheckpointIO`, through which Lightning writes
 every checkpoint: to `<name>.part`, synced, then renamed over `<name>`. A kill
 leaves both checkpoints whole, beside a `.part` that no reader matches. A
-SIGTERM, from a time limit or `scancel`, does no harm: Lightning only notes it,
-and SLURM waits KillWait (200 s on that cluster) before it sends SIGKILL, so a
-write finishes.
+SIGTERM, from a time limit or `scancel`, stops the run at the next training
+batch without saving anything: what is left is `best.ckpt` and the `last.ckpt`
+of the last finished validation. SLURM waits KillWait before it sends SIGKILL,
+so a write in progress finishes.
 
 `LastCheckpoint` is a ModelCheckpoint with nothing of its own to save, not a
 plain Callback, for the order. Lightning runs every ModelCheckpoint after all
 other callbacks, in the order they were given, so this one runs after
 upstream's, and `last.ckpt` keeps upstream's state of the same validation. A plain Callback
 runs before it: when the last validation was also the best, its `last.ckpt`
-said that the best score was the one before (0.2 where it was 0.3, in a
-check). The weights are the same either way; that state is what a run resumed
-from `last.ckpt` would read.
+holds the best score of the validation before. The weights are the same either
+way; that state is what a run resumed from `last.ckpt` would read. `train.py`
+has no option to resume yet, and a resume into a new run folder makes
+upstream's callback forget its best score.
 """
 
 from __future__ import annotations
