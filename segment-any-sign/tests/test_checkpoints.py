@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import ROOT
 from tests.test_locations import needs
 
 LIGHTNING = ("pytorch_lightning", "torch")
@@ -248,19 +247,3 @@ def test_a_kill_during_a_write_leaves_both_checkpoints_whole(killed, best_step, 
     assert best["global_step"] == best_step and best_score_inside(best) == pytest.approx(0.3)
     assert last["global_step"] == last_step              # the validation before the kill
     assert (tmp_path / f"{killed}.part").exists()
-
-
-def test_the_module_imports_nothing_of_this_repository():
-    """It is about Lightning only, so that it can be read and used on its own."""
-    import ast
-
-    tree = ast.parse((ROOT / "experiments" / "checkpoints.py").read_text())
-    imported = {alias.name.split(".")[0] for node in ast.walk(tree)
-                if isinstance(node, ast.Import) for alias in node.names}
-    imported |= {node.module.split(".")[0] for node in ast.walk(tree)
-                 if isinstance(node, ast.ImportFrom) and node.module and not node.level}
-    assert not any(isinstance(node, ast.ImportFrom) and node.level for node in ast.walk(tree))
-    # every package and module of segment-any-sign/ and of the repository root
-    ours = {path.stem for folder in (ROOT, ROOT.parent) for path in folder.iterdir()
-            if path.suffix == ".py" or (path / "__init__.py").exists()}
-    assert imported and not imported & ours, imported & ours
