@@ -72,7 +72,8 @@ and branch and whether the tree had uncommitted changes, the paths file and the
 folder of every key in it, and the python/torch/GPU it ran on — enough to
 reproduce the run from the checkpoint alone. See `write_run_config`. The
 options and the command as typed also go into the config of the W&B run, which
-keeps them after scratch has deleted the run folder.
+keeps them after scratch has deleted the run folder. Every checkpoint of the run
+keeps the whole record under the key `run_config` (`ValidationMetricsModel`).
 
 The full metric set from `../metrics/` is logged on **both** train and validation
 under matching names, so W&B can overlay the two curves — see
@@ -595,6 +596,8 @@ def main() -> None:
     # the file is written, so that "args" there does not hold them twice.
     args.options = record["options"]
     args.command_as_typed = record["command_as_typed"]
+    # and every checkpoint of the run keeps the record (`on_save_checkpoint`)
+    ValidationMetricsModel.run_config = record
 
     # panels follow the *running best* model: redrawn only when `monitor`
     # improves, which is the same test ModelCheckpoint applies, so the figure in

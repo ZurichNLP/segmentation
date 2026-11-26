@@ -513,6 +513,10 @@ def start_training(monkeypatch, *arguments, training=None) -> dict:
     import sign_language_segmentation.train as upstream_train
 
     monkeypatch.setattr(upstream_train, "train", training or (lambda monitor_metric: None))
+    # main() gives the model class the record of the run; no other test may meet it
+    from experiments.validation_metrics import ValidationMetricsModel
+
+    monkeypatch.setattr(ValidationMetricsModel, "run_config", None, raising=False)
     # --eval-split none: no end step, whose scripts would read the corpus
     start_main(monkeypatch, "--eval-split", "none", *arguments)
     return written_record()
@@ -629,3 +633,109 @@ def test_main_sends_the_options_and_the_command_as_typed_to_wandb(project, monke
     assert config["command_as_typed"] == record["command_as_typed"]
     # and run_config.json holds them once, outside "args"
     assert "options" not in record["args"] and "command_as_typed" not in record["args"]
+
+
+# --- the record in every checkpoint ------------------------------------------
+
+#: a record as `write_run_config` returns it, cut to the keys these tests read
+RECORD = {"run_id": "00_run-2026.11.26", "options": {"sampling": "video", "decode": None},
+          "args": {"decode": "b-honouring", "levels": "both"},
+          "paths": {"file": "paths.test.yaml"}, "environment": {"host": "node"}}
+
+
+def checkpoint_with(record, tmp_path, monkeypatch, name="best.ckpt") -> Path:
+    """A checkpoint of a small model of ours, written while the record of the run is `record`."""
+    from experiments.validation_metrics import ValidationMetricsModel
+
+    from tests.test_decoder_use import SMALL, checkpoint_of
+
+    monkeypatch.setattr(ValidationMetricsModel, "run_config", record, raising=False)
+    return checkpoint_of(ValidationMetricsModel(**SMALL), tmp_path / name)
+
+
+def stored(path: Path) -> dict:
+    import torch
+
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
+@needs(*UPSTREAM)
+def test_a_checkpoint_keeps_the_record_of_its_run(tmp_path, monkeypatch):
+    checkpoint = stored(checkpoint_with(RECORD, tmp_path, monkeypatch))
+    assert checkpoint["run_config"] == RECORD
+    # a key of its own: the hyperparameters are what they were
+    assert "run_config" not in checkpoint["hyper_parameters"]
+    assert checkpoint["hyper_parameters"]["decode"] == RECORD["args"]["decode"]
+
+
+@needs(*UPSTREAM)
+def test_a_model_built_without_a_record_writes_none(tmp_path, monkeypatch):
+    # a dry run, a test, or upstream's class: no key, rather than an empty one
+    assert "run_config" not in stored(checkpoint_with(None, tmp_path, monkeypatch))
+
+
+@needs(*UPSTREAM)
+def test_a_record_that_names_another_decoder_is_refused_when_the_model_is_built(monkeypatch):
+    from experiments.validation_metrics import ValidationMetricsModel
+    from metrics import get_decoder
+
+    from tests.test_decoder_use import SMALL
+
+    monkeypatch.setattr(ValidationMetricsModel, "decoder", get_decoder("b-honouring"))
+    monkeypatch.setattr(ValidationMetricsModel, "run_config",
+                        {**RECORD, "args": {"decode": "b-ignoring"}}, raising=False)
+    with pytest.raises(ValueError) as refused:
+        ValidationMetricsModel(**SMALL)
+    assert "b-ignoring" in str(refused.value) and "b-honouring" in str(refused.value)
+
+
+@needs(*UPSTREAM)
+def test_the_loaders_read_a_checkpoint_that_keeps_a_record(tmp_path, monkeypatch):
+    import torch
+    from benchmark.predict_dgs_2026 import load_checkpoint
+
+    from sign_language_segmentation.model.model import PoseTaggingModel
+
+    path = checkpoint_with(RECORD, tmp_path, monkeypatch)
+    weights = stored(path)
+    assert "run_config" in weights
+    for loaded in (PoseTaggingModel.load_from_checkpoint(path, map_location="cpu"),
+                   load_checkpoint(str(path))):
+        for key, value in weights["state_dict"].items():
+            assert torch.equal(loaded.state_dict()[key], value), key
+    # the decoder is still read from the hyperparameters
+    assert load_checkpoint(str(path)).stored_decode == "b-honouring"
+
+
+@needs(*UPSTREAM)
+def test_the_export_leaves_the_record_out_of_config_json(tmp_path, monkeypatch):
+    """Upstream's export, which `publish.py` uploads: the folders and host stay behind."""
+    from sign_language_segmentation.publish.utils import convert_to_safetensors
+
+    path = checkpoint_with(RECORD, tmp_path, monkeypatch)
+    assert "run_config" in stored(path)
+    (tmp_path / "export").mkdir()
+    convert_to_safetensors(str(path), tmp_path / "export")
+
+    config = json.loads((tmp_path / "export" / "config.json").read_text())
+    assert set(config) == set(stored(path)["hyper_parameters"])
+    assert "run_config" not in config and RECORD["environment"]["host"] not in json.dumps(config)
+
+
+@needs(*UPSTREAM)
+def test_main_gives_the_checkpoints_of_the_run_its_record(project, tmp_path, monkeypatch):
+    from experiments.validation_metrics import ValidationMetricsModel
+
+    from tests.test_decoder_use import SMALL, checkpoint_of
+
+    written = []
+
+    def training(monitor_metric):
+        # as upstream builds the model: after main() has set the class up
+        written.append(checkpoint_of(ValidationMetricsModel(**SMALL), tmp_path / "best.ckpt"))
+
+    record = start_training(monkeypatch, "--sampling", "video", "--decode", "i-runs-kept",
+                            training=training)
+    checkpoint = stored(written[0])
+    assert checkpoint["run_config"] == record
+    assert checkpoint["hyper_parameters"]["decode"] == record["args"]["decode"] == "i-runs-kept"
