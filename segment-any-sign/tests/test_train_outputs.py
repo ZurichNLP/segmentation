@@ -515,6 +515,11 @@ def start_training(monkeypatch, *arguments, training=None) -> dict:
     monkeypatch.setattr(upstream_train, "train", training or (lambda monitor_metric: None))
     # --eval-split none: no end step, whose scripts would read the corpus
     start_main(monkeypatch, "--eval-split", "none", *arguments)
+    return written_record()
+
+
+def written_record() -> dict:
+    """The run_config.json of the one run folder under `dist` of the working directory."""
     [written] = Path("dist").glob("*/run_config.json")
     return json.loads(written.read_text())
 
@@ -571,3 +576,56 @@ def test_main_records_the_values_it_resolves_that_no_other_key_holds(
     """The step budget, the validation interval, the workers and the class weights."""
     record = start_training(monkeypatch, *options)
     assert {key: record["args"][key] for key in expected} == expected
+
+
+@needs(*UPSTREAM)
+def test_main_sends_the_options_and_the_command_as_typed_to_wandb(project, monkeypatch):
+    """What upstream's `train()` gives W&B as the config of the run, with no connection.
+
+    Upstream's own `train()` runs with the WandbLogger of Lightning, and W&B in
+    the mode `disabled`, whose run keeps the config it is given and sends
+    nothing. Upstream logs its namespace `args` as that config; the run is
+    stopped right after, where it would start to read the data.
+    """
+    from pytorch_lightning.loggers import WandbLogger
+
+    from tests.test_decoder_use import Reached
+
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    monkeypatch.setattr(sys, "argv", ["train.py"])
+    import sign_language_segmentation.train as upstream_train
+
+    real_train, loggers = upstream_train.train, []
+
+    def stop(*arguments, **options):
+        raise Reached
+
+    def keep(**options):
+        loggers.append(WandbLogger(**options))
+        return loggers[-1]
+
+    def training(monitor_metric):
+        # the namespace that main() filled
+        from sign_language_segmentation.args import args
+
+        # Upstream's module keeps the namespace of its first import. In a run the
+        # two are one; in a test the first import was another command line.
+        monkeypatch.setattr(upstream_train, "args", args)
+        # start_main passes --no_wandb, so that main() asks for no W&B folder
+        monkeypatch.setattr(args, "no_wandb", False)
+        monkeypatch.setattr(upstream_train, "WandbLogger", keep)
+        monkeypatch.setattr(upstream_train, "get_dataloader", stop)
+        real_train(monitor_metric=monitor_metric)
+
+    typed = ["python", "experiments/train.py", "--sampling", "video"]
+    monkeypatch.setattr(sys, "orig_argv", typed)
+    with pytest.raises(Reached):
+        start_training(monkeypatch, "--sampling", "video", training=training)
+    record = written_record()
+
+    config = dict(loggers[0].experiment.config)
+    assert config["options"] == record["options"]
+    assert config["options"]["sampling"] == "video"
+    assert config["command_as_typed"] == record["command_as_typed"]
+    # and run_config.json holds them once, outside "args"
+    assert "options" not in record["args"] and "command_as_typed" not in record["args"]

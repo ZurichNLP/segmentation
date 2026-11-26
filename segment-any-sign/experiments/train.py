@@ -70,7 +70,9 @@ It also writes `dist/<run>/run_config.json`: every hyperparameter, the command
 as it was typed, every option of this script as it was given, the git commit
 and branch and whether the tree had uncommitted changes, the paths file and the
 folder of every key in it, and the python/torch/GPU it ran on — enough to
-reproduce the run from the checkpoint alone. See `write_run_config`.
+reproduce the run from the checkpoint alone. See `write_run_config`. The
+options and the command as typed also go into the config of the W&B run, which
+keeps them after scratch has deleted the run folder.
 
 The full metric set from `../metrics/` is logged on **both** train and validation
 under matching names, so W&B can overlay the two curves — see
@@ -587,7 +589,12 @@ def main() -> None:
     print(f"  selection    {monitor} (max)\n")
 
     link_slurm_log(run_dir)
-    write_run_config(run_dir, args, given, monitor)
+    record = write_run_config(run_dir, args, given, monitor)
+    # W&B keeps the record once scratch has deleted the run folder (after 30
+    # days): upstream gives W&B `vars(args)` as the config of the run. Set after
+    # the file is written, so that "args" there does not hold them twice.
+    args.options = record["options"]
+    args.command_as_typed = record["command_as_typed"]
 
     # panels follow the *running best* model: redrawn only when `monitor`
     # improves, which is the same test ModelCheckpoint applies, so the figure in
@@ -1129,8 +1136,10 @@ def slurm_log_warning(log_path: str | Path) -> str | None:
         return None
 
 
-def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
+def write_run_config(run_dir: Path, args, mine, monitor: str) -> dict:
     """Record everything needed to reproduce this run, beside its checkpoints.
+
+    Returns the record as it is in the file.
 
     Every hyperparameter (upstream's and ours), the command line, every option
     of this script, the state of the code, and the software/hardware it ran on.
@@ -1193,8 +1202,10 @@ def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
                         "host": platform.node(), "gpu": device_name},
     }
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "run_config.json").write_text(json.dumps(config, indent=2, default=str))
+    text = json.dumps(config, indent=2, default=str)
+    (run_dir / "run_config.json").write_text(text)
     print(f"wrote {run_dir}/run_config.json  (commit {provenance.describe(config['code'])})")
+    return json.loads(text)
 
 
 def write_data_report(run_dir: Path, phrase: str) -> dict:
