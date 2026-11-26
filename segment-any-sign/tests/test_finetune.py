@@ -153,14 +153,16 @@ def test_main_with_finetune_from_records_the_source_and_the_decoder(
 
         model = upstream_train.load_model(model_dir=args.finetune_from, device="cpu",
                                           config_overrides=dict(RUN), eval_mode=False)
-        written.append(checkpoint_of(model, tmp_path / "best.ckpt"))
+        written.append((model, checkpoint_of(model, tmp_path / "best.ckpt")))
 
     record = start_training(monkeypatch, "--finetune_from", str(source), *options,
                             training=training)
 
-    checkpoint = stored(written[0])
+    [(built, path)] = written
+    assert type(built) is ValidationMetricsModel
+    checkpoint = stored(path)
     assert record["args"]["decode"] == checkpoint["hyper_parameters"]["decode"] == expected
     assert record["args"]["finetune_source"] == source_of(source)
     assert checkpoint["run_config"] == record
     # and the checkpoint is read back as every script reads one
-    assert load_checkpoint(str(written[0])).stored_decode == expected
+    assert load_checkpoint(str(path)).stored_decode == expected
