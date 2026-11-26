@@ -56,11 +56,18 @@ The job runs in the checkout it was submitted from, with the `python` that was o
 
 ## Starting from a checkpoint
 
-`--finetune_from`, an option of upstream's, starts a run from the weights of a checkpoint. It takes whatever upstream's loader takes: a `.ckpt`, a run folder, whose `best.ckpt` it reads, or upstream's safetensors export. That loader builds the model under its own name, `PoseTaggingModel`: with `load_from_checkpoint` for a `.ckpt`, and for an export by building it from `config.json` and loading the tensors. Either way it gives the model every model option of the run, over those kept with the source, and loads the tensors strictly. `train.py` puts `ValidationMetricsModel` under that name. So the model is that of a run without the option, with every setting of the run, and it starts with every tensor of the checkpoint; the optimiser, the learning-rate schedule and the step start anew. `--lr_scale_backbone`, upstream's, multiplies the learning rate of the backbone (the convolutional encoder, the normalisation after it and the Transformer) and leaves that of the two heads as it is: at its default of 1, a run from a checkpoint trains every layer at the rate and schedule of a run from scratch.
+`--finetune_from`, upstream's option, starts a run from the weights of a `.ckpt`, a run folder (its `best.ckpt`) or upstream's safetensors export, whose float tensors are bf16. From inside `segment-any-sign/` with the `sas` environment active:
 
-The decoder is `--decode`, else the one kept in the checkpoint, else `b-honouring`. The record of the run keeps, under `finetune_source`, the file, its sha256, its step and the record of the run that wrote it, when the checkpoint keeps one. A checkpoint of another shape stops the run when the model is built, with the error of torch: a size mismatch in `frame_cnn.0.encoder_layers.0.0.weight` is `--velocity`, and the other options that shape a tensor are `--hidden_dim`, `--encoder_depth`, `--attn_nhead` and `--attn_ff_mult`. A dry run loads the checkpoint too.
+```bash
+python experiments/train.py --run_name <NN>_dgs_from_youtube --decode b-honouring \
+    --finetune_from dist/02_pretrain_youtube_repro-2026.11.23/best.ckpt
+```
 
-The sign head of the YouTube checkpoint `02_pretrain_youtube_repro-2026.11.23` was never trained, so every run that starts from it starts with the same sign head.
+Apart from its weights the run is one from scratch: its options apply, every tensor of the source is loaded, and optimiser, schedule and step start anew. `--lr_scale_backbone` scales the learning rate of the backbone, not of the heads; at its default of 1 both train at one rate, as from scratch.
+
+The decoder is `--decode`, else the one kept in the checkpoint, else `b-honouring`: give `--decode`, so that a run and its control decode alike. `finetune_source` in the record keeps the file, its sha256, its step and its run's record, when kept.
+
+A source of another shape stops the run with torch's error when the model is built, so start with `--dry-run`. A size mismatch in `frame_cnn.0.encoder_layers.0.0.weight` is `--velocity`; any other comes from `--hidden_dim`, `--encoder_depth`, `--attn_nhead` or `--attn_ff_mult`.
 
 ## What differs 2023 vs 2026, apart from the architecture
 
@@ -214,6 +221,8 @@ All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twi
 `step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run so far selected between 8k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
 
 Row 11 repeats row 10, most likely with the same seed (`--seed` defaults to 42), so the gap between them is run-to-run spread. Bold marks cover rows 1–10.
+
+The sign head of the checkpoint of row 11 was never trained, so every run that starts from it ([Starting from a checkpoint](#starting-from-a-checkpoint)) starts with the same sign head.
 
 **Defaults since 2026-09-15 are row 9's recipe**: `--fps-aug on`, `--tempo-stretch on`, frame dropout 0.15, body-part dropout 0.1 and attention dropout 0.1, in both `train.py` and `pretrain_youtube.slurm`. Rows 1–9 each spell out what they turned on, so they read the same as before; any run launched after this without those flags gets the recipe.
 

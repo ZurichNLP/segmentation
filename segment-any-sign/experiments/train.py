@@ -324,8 +324,9 @@ def main() -> None:
     # metrics without touching upstream code or copying its training loop.
     from experiments.validation_metrics import ValidationMetricsModel
     upstream_train.PoseTaggingModel = ValidationMetricsModel
-    # --finetune_from: upstream's loader builds that model under its own name, so
-    # it gets ours too. See "Starting from a checkpoint" in README.md
+    # --finetune_from: upstream's loader builds that model under its own name, with
+    # load_from_checkpoint for a .ckpt and from config.json for an export; train.py
+    # puts ValidationMetricsModel under that name. How to use it: README.md.
     stored = None
     if args.finetune_from:
         from benchmark.predict_dgs_2026 import model_file, stored_decode
@@ -945,8 +946,8 @@ def set_decoder(args, given: str | None, stored: str | None = None):
 
     `given` is the value of `--decode`, by its name of today or an earlier one,
     or None when the option was not given. `stored` is the name of the decoder
-    kept with the checkpoint of `--finetune_from`, or None. The decoder is `given`, else
-    `stored`, else the default (`metrics.choose_decoder`).
+    kept with the checkpoint of `--finetune_from`, or None. The decoder is
+    `given`, else `stored`, else the default (`metrics.choose_decoder`).
 
       * `ValidationMetricsModel.decoder`: validation decodes with it, so the
         selection metric and the checkpoint that is kept follow it;
