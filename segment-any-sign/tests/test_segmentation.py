@@ -349,6 +349,34 @@ def test_greedy_match_equals_the_reference_on_random_matrices(kind):
             f"{kind} matrix {index}:\n{matrix!r}\ngives {result}, not {expected}"
 
 
+#: inputs that the random matrices do not reach, for the comparison with the reference
+FIXED_INPUTS = {
+    # empty but not 2-D: the reference returns [] for every empty input
+    "np.array([])": np.array([]),
+    "[]": [],
+    "np.zeros((0, 2, 2))": np.zeros((0, 2, 2)),
+    # larger than the random shapes, with a tie at most steps
+    "many ties, 100 x 100": RANDOM_MATRICES["many ties"](np.random.default_rng(0), (100, 100)),
+}
+
+
+@pytest.mark.parametrize("name", list(FIXED_INPUTS))
+def test_greedy_match_equals_the_reference_on_these_inputs(name):
+    matrix = FIXED_INPUTS[name]
+    result, expected = greedy_match(matrix), _greedy_match_reference(matrix)
+    assert _same_list(result, expected), f"{name} gives {result}, not {expected}"
+
+
+@pytest.mark.parametrize("matrix", [[0.5], [0.5, -1.0], np.ones((1, 1, 1))],
+                         ids=["1-D", "1-D with a negative entry", "3-D"])
+def test_greedy_match_raises_on_input_not_2d_and_not_empty(matrix):
+    # as the reference does; np.atleast_2d would make a 1-D input succeed
+    with pytest.raises(ValueError):
+        _greedy_match_reference(matrix)
+    with pytest.raises(ValueError):
+        greedy_match(matrix)
+
+
 def test_greedy_match_breaks_ties_by_row_then_column():
     # Three 1s tie. (0, 0) comes first, as np.argmax has it, and blocks the
     # other two, which leaves 0.5. Taking (0, 1) first would leave (1, 0) free
