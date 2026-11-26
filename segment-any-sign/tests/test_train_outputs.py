@@ -544,3 +544,30 @@ def test_main_records_the_options_as_given_and_the_command_as_typed(project, mon
     # "command" is the line upstream parsed: without the options of the project
     assert record["command"].endswith("train.py --no_wandb --device cpu --datasets dgs_corpus")
     assert record["args"]["decode"] == "b-honouring" and record["args"]["levels"] == "both"
+
+
+def available_cpus() -> int:
+    """The CPUs this process may use, counted as `main()` counts them."""
+    return len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") \
+        else (os.cpu_count() or 8)
+
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("options, expected", [
+    # 4 clips at batch 64 are one step per epoch: a validation every step
+    ([], {"max_steps": 5000, "val_every": 1, "num_workers": min(32, available_cpus()),
+          "class_weights": {"sign": [0.0, 1.0, 9.0, 1.0],      # start_main stands in for measuring
+                            "sentence": [0.0, 1.0, 9.0, 1.0]}}),
+    (["--max-steps", "40", "--val-every", "5", "--num-workers", "3",
+      "--class-weights", "1,5,1"],
+     {"max_steps": 40, "val_every": 5, "num_workers": 3,
+      "class_weights": {"sign": [0.0, 1.0, 5.0, 1.0], "sentence": [0.0, 1.0, 5.0, 1.0]}}),
+    (["--class-weights", "none"],
+     {"max_steps": 5000, "val_every": 1, "num_workers": min(32, available_cpus()),
+      "class_weights": None}),
+])
+def test_main_records_the_values_it_resolves_that_no_other_key_holds(
+        options, expected, project, monkeypatch):
+    """The step budget, the validation interval, the workers and the class weights."""
+    record = start_training(monkeypatch, *options)
+    assert {key: record["args"][key] for key in expected} == expected

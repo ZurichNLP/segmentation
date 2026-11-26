@@ -348,6 +348,9 @@ def main() -> None:
     available = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") \
         else (os.cpu_count() or 8)
     workers = mine.num_workers or max(1, min(32, available))
+    # recorded: the worker count changes the draws of the augmentation, and the
+    # CPUs of a job are in no other key
+    args.num_workers = workers
     upstream_train.get_dataloader = get_dataloader_multi
 
     # Validate on a step schedule, not an epoch one. `check_val_every_n_epoch=None`
@@ -454,6 +457,8 @@ def main() -> None:
             mine.val_every = max(1, min(mine.max_steps // 100, steps_per_epoch))
 
     trainer_extra["val_check_interval"] = mine.val_every * mine.accumulate
+    # as resolved, for run_config.json and W&B: `options` there holds them as given
+    args.max_steps, args.val_every = mine.max_steps, mine.val_every
 
     # sample train metrics ten times per evaluation, so both curves are smooth
     ValidationMetricsModel.metrics_every_n_steps = max(1, mine.val_every // 10)
@@ -529,6 +534,8 @@ def main() -> None:
             source=mine.weights_from)
     args.class_weighting = weighting
     args.class_weights_from = mine.weights_from or args.datasets.split(",")[0]
+    # the weights themselves, by level in upstream's order (UNK, O, B, I), or None
+    args.class_weights = ValidationMetricsModel.class_weights
 
     # The decoder of the run: --decode, else the default, b-honouring. The person
     # who launches the run chooses it; nothing here derives it from the recipe.
