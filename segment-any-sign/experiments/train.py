@@ -355,7 +355,10 @@ def main() -> None:
         else (os.cpu_count() or 8)
     workers = mine.num_workers or max(1, min(32, available))
     # recorded: the worker count changes the draws of the augmentation, and the
-    # CPUs of a job are in no other key
+    # CPUs of a job are in no other key. It is the budget of workers of the run:
+    # each loader gets at most this number. `_with_workers`, and
+    # `frame_uniform_loader` for the training loader, cap it at the size of the
+    # dataset, and `_split_workers` divides it among the validation sets.
     args.num_workers = workers
     upstream_train.get_dataloader = get_dataloader_multi
 
