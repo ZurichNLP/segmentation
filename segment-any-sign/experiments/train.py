@@ -326,7 +326,7 @@ def main() -> None:
     upstream_train.PoseTaggingModel = ValidationMetricsModel
     # --finetune_from: upstream's loader builds that model under its own name, so
     # it gets ours too. See "Starting from a checkpoint" in README.md
-    stored_decoder = None
+    stored = None
     if args.finetune_from:
         from benchmark.predict_dgs_2026 import model_file, stored_decode
 
@@ -335,7 +335,7 @@ def main() -> None:
 
         upstream_bin.PoseTaggingModel = ValidationMetricsModel
         args.finetune_source = source_of(model_file(args.finetune_from))
-        stored_decoder = stored_decode(args.finetune_from)
+        stored = stored_decode(args.finetune_from)
 
     # Validate on a list of datasets, not one. Upstream builds a single DEV
     # loader; wrapping `get_dataloader` turns that call into one loader per named
@@ -575,7 +575,7 @@ def main() -> None:
     # The decoder of the run: --decode, else the one kept with the checkpoint of
     # --finetune_from, else the default, b-honouring. The person who launches the
     # run chooses it; nothing here derives it from the recipe.
-    decoder = set_decoder(args, mine.decode, stored_decoder)
+    decoder = set_decoder(args, mine.decode, stored)
 
     report_effective_config(args, mine, _dated_run_name(args.run_name))
     # said once, after the configuration it is about; it changes and stops nothing
@@ -944,8 +944,8 @@ def set_decoder(args, given: str | None, stored: str | None = None):
     """Give the run its decoder, in the three places that must agree, and return it.
 
     `given` is the value of `--decode`, by its name of today or an earlier one,
-    or None when the option was not given. `stored` is the decoder kept with the
-    checkpoint of `--finetune_from`, or None. The decoder is `given`, else
+    or None when the option was not given. `stored` is the name of the decoder
+    kept with the checkpoint of `--finetune_from`, or None. The decoder is `given`, else
     `stored`, else the default (`metrics.choose_decoder`).
 
       * `ValidationMetricsModel.decoder`: validation decodes with it, so the
