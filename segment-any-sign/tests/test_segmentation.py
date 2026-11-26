@@ -269,6 +269,145 @@ def test_greedy_match_empty():
     assert greedy_match(np.zeros((2, 0))) == []
 
 
+def _greedy_match_reference(matrix):
+    """`greedy_match` as it was first written: the specification of its result.
+
+    It took the largest IoU left with `np.argmax` and deleted its row and its
+    column, which copies the matrix at every step and took seconds for a clip
+    with 2,000 gold signs. Kept verbatim, and not to be changed: `greedy_match`
+    must return exactly this list, for every input, ties and the zeros at the
+    end included.
+    """
+    remaining = np.array(matrix, dtype=float, copy=True)
+    matched: list[float] = []
+    while remaining.size and min(remaining.shape) > 0:
+        row, column = np.unravel_index(np.argmax(remaining), remaining.shape)
+        matched.append(float(remaining[row, column]))
+        remaining = np.delete(remaining, row, axis=0)
+        remaining = np.delete(remaining, column, axis=1)
+    return matched
+
+
+def _same_list(result, expected):
+    """The same list, bit for bit: Python floats with the same `repr`.
+
+    `repr` gives back every float exactly, tells -0.0 from 0.0 and writes every
+    NaN as `nan`, so it is exact where `==` is not: `==` takes -0.0 for 0.0, and
+    never takes a NaN for a NaN.
+    """
+    return (all(type(value) is float for value in result)
+            and [repr(value) for value in result] == [repr(value) for value in expected])
+
+
+def _random_shape(rng, index):
+    """The eight kinds of shape in turn: square, tall, wide, one row, one
+    column, empty in either direction, and empty in both."""
+    n, k = int(rng.integers(1, 13)), int(rng.integers(1, 13))
+    return [(n, n), (n + k, n), (n, n + k), (1, n), (n, 1),
+            (0, n), (n, 0), (0, 0)][index % 8]
+
+
+def _random_segments(rng, count):
+    starts = rng.integers(0, 60, size=count)
+    return [seg(int(start), int(start + rng.integers(0, 8))) for start in starts]
+
+
+#: seeded random matrices of each kind, for the comparison with the reference
+RANDOM_MATRICES = {
+    # distinct values, so no ties
+    "continuous": lambda rng, shape: rng.random(shape),
+    # four values only, so a tie decides most steps
+    "many ties": lambda rng, shape: rng.integers(0, 4, size=shape) / 4,
+    # mostly zero, with whole rows and columns of zeros
+    "zero rows and columns": lambda rng, shape: (
+        rng.integers(0, 3, size=shape) / 2 * (rng.random(shape) < 0.3)
+        * (rng.random((shape[0], 1)) < 0.7) * (rng.random((1, shape[1])) < 0.7)),
+    "all zeros": lambda rng, shape: np.zeros(shape),
+    # what greedy_match is given: IoUs of segments, equal fractions tie exactly
+    "iou of segments": lambda rng, shape: iou_matrix(
+        _random_segments(rng, shape[1]), _random_segments(rng, shape[0])),
+    # No IoU is below zero, NaN or infinite, but the list must be the same for
+    # those too.
+    "negative": lambda rng, shape: rng.integers(-3, 3, size=shape) / 2,
+    "signed zeros and inf": lambda rng, shape: np.where(
+        rng.random(shape) < 0.3, -0.0,
+        np.where(rng.random(shape) < 0.05, np.inf, rng.integers(0, 3, size=shape) / 2)),
+    "nan and inf": lambda rng, shape: np.where(
+        rng.random(shape) < 0.1, np.nan,
+        np.where(rng.random(shape) < 0.1, rng.choice([np.inf, -np.inf], size=shape),
+                 rng.integers(-1, 3, size=shape) / 2)),
+}
+
+
+@pytest.mark.parametrize("kind", list(RANDOM_MATRICES))
+def test_greedy_match_equals_the_reference_on_random_matrices(kind):
+    rng = np.random.default_rng(0)
+    for index in range(1000):
+        matrix = RANDOM_MATRICES[kind](rng, _random_shape(rng, index))
+        result, expected = greedy_match(matrix), _greedy_match_reference(matrix)
+        assert _same_list(result, expected), \
+            f"{kind} matrix {index}:\n{matrix!r}\ngives {result}, not {expected}"
+
+
+#: inputs that the random matrices do not reach, for the comparison with the reference
+FIXED_INPUTS = {
+    # empty but not 2-D: the reference returns [] for every empty input
+    "np.array([])": np.array([]),
+    "[]": [],
+    "np.zeros((0, 2, 2))": np.zeros((0, 2, 2)),
+    # larger than the random shapes, with a tie at most steps
+    "many ties, 100 x 100": RANDOM_MATRICES["many ties"](np.random.default_rng(0), (100, 100)),
+}
+
+
+@pytest.mark.parametrize("name", list(FIXED_INPUTS))
+def test_greedy_match_equals_the_reference_on_these_inputs(name):
+    matrix = FIXED_INPUTS[name]
+    result, expected = greedy_match(matrix), _greedy_match_reference(matrix)
+    assert _same_list(result, expected), f"{name} gives {result}, not {expected}"
+
+
+@pytest.mark.parametrize("matrix", [[0.5], [0.5, -1.0], np.ones((1, 1, 1))],
+                         ids=["1-D", "1-D with a negative entry", "3-D"])
+def test_greedy_match_raises_on_input_not_2d_and_not_empty(matrix):
+    # as the reference does; np.atleast_2d would make a 1-D input succeed
+    with pytest.raises(ValueError):
+        _greedy_match_reference(matrix)
+    with pytest.raises(ValueError):
+        greedy_match(matrix)
+
+
+def test_greedy_match_breaks_ties_by_row_then_column():
+    # Three 1s tie. (0, 0) comes first, as np.argmax has it, and blocks the
+    # other two, which leaves 0.5. Taking (0, 1) first would leave (1, 0) free
+    # and give [1.0, 1.0].
+    assert greedy_match(np.array([[1.0, 1.0], [1.0, 0.5]])) == [1.0, 0.5]
+
+
+def test_greedy_match_ends_with_the_zeros_left():
+    # one value for each gold or each predicted segment, whichever are fewer
+    matrix = np.zeros((3, 5))
+    matrix[1, 2] = 0.4
+    assert greedy_match(matrix) == [0.4, 0.0, 0.0]
+    assert greedy_match(np.zeros((3, 5))) == [0.0, 0.0, 0.0]
+    assert greedy_match(np.zeros((5, 3))) == [0.0, 0.0, 0.0]
+    # the entries themselves, not a 0.0 written in their place
+    assert repr(greedy_match(np.array([[-0.0, 0.0]]))) == "[-0.0]"
+
+
+def test_greedy_match_one_row_and_one_column():
+    assert greedy_match(np.array([[0.2, 0.7, 0.7]])) == [0.7]
+    assert greedy_match(np.array([[0.2], [0.7], [0.7]])) == [0.7]
+
+
+def test_greedy_match_negative_and_nan_entries():
+    # No IoU is either, but the list is still the reference's: a negative value
+    # is taken when nothing larger is left, and a NaN first, since np.argmax
+    # takes it for the largest value.
+    assert greedy_match(np.array([[-1.0]])) == [-1.0]
+    assert repr(greedy_match(np.array([[np.nan, 1.0], [2.0, 3.0]]))) == "[nan, 3.0]"
+
+
 # --- counts and micro aggregation -------------------------------------------
 
 def test_segment_counts_shape_and_values():
