@@ -1,7 +1,7 @@
-"""How the checkpoints of a run are written (`experiments/last_checkpoint.py`).
+"""How the checkpoints of a run are written (`experiments/checkpoints.py`).
 
 Run from `segment-any-sign/`:
-    pytest tests/test_last_checkpoint.py
+    pytest tests/test_checkpoints.py
 
 A run folder keeps `best.ckpt`, which upstream's ModelCheckpoint writes when
 the selection metric improves, and `last.ckpt`, which `LastCheckpoint` writes
@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import ROOT
 from tests.test_locations import needs
 
 LIGHTNING = ("pytorch_lightning", "torch")
@@ -90,7 +91,7 @@ def test_a_run_keeps_its_best_and_its_last_validation(metrics, best_step, best_s
     import logging
 
     import torch
-    from experiments.last_checkpoint import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
+    from experiments.checkpoints import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
 
     # Lightning's own logger does not pass its records on to the root logger,
     # where caplog listens, so they are kept here
@@ -149,7 +150,7 @@ class TrainerThatSaves:
 @needs(*LIGHTNING)
 def test_last_checkpoint_asks_the_trainer_for_the_whole_last_ckpt(tmp_path):
     """The `.part` and the rename are the CheckpointIO's (see WholeFileCheckpointIO)."""
-    from experiments.last_checkpoint import LastCheckpoint
+    from experiments.checkpoints import LastCheckpoint
 
     saved = []
     trainer = TrainerThatSaves(saved.append)
@@ -163,7 +164,7 @@ def test_last_checkpoint_asks_the_trainer_for_the_whole_last_ckpt(tmp_path):
 @needs(*LIGHTNING)
 def test_last_checkpoint_stops_a_fit_without_whole_file_io(tmp_path):
     """Else last.ckpt would be written in place, and a kill could truncate it."""
-    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
+    from experiments.checkpoints import LastCheckpoint, turn_off_save_last
 
     callbacks = [upstream_checkpoint(tmp_path)]
     turn_off_save_last(callbacks)
@@ -177,7 +178,7 @@ def test_last_checkpoint_stops_a_fit_without_whole_file_io(tmp_path):
 @pytest.mark.parametrize("trainer", [{"sanity_checking": True}, {"fitting": False},
                                      {"fast_dev_run": True}])
 def test_nothing_is_saved_outside_the_validations_of_a_fit(trainer, tmp_path):
-    from experiments.last_checkpoint import LastCheckpoint
+    from experiments.checkpoints import LastCheckpoint
 
     saved, folder = [], tmp_path / "run"
     folder.mkdir()
@@ -187,7 +188,7 @@ def test_nothing_is_saved_outside_the_validations_of_a_fit(trainer, tmp_path):
 
 @needs(*LIGHTNING)
 def test_save_last_of_upstream_is_turned_off(tmp_path):
-    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
+    from experiments.checkpoints import LastCheckpoint, turn_off_save_last
     from pytorch_lightning.callbacks import EarlyStopping
 
     upstream = upstream_checkpoint(tmp_path)
@@ -199,7 +200,7 @@ def test_save_last_of_upstream_is_turned_off(tmp_path):
 @needs(*LIGHTNING)
 @pytest.mark.parametrize("found", [0, 2])
 def test_the_run_stops_unless_upstream_gives_exactly_one_checkpoint_callback(found, tmp_path):
-    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
+    from experiments.checkpoints import LastCheckpoint, turn_off_save_last
     from pytorch_lightning.callbacks import EarlyStopping
 
     upstreams = [upstream_checkpoint(tmp_path / str(n)) for n in range(found)]
@@ -208,7 +209,7 @@ def test_the_run_stops_unless_upstream_gives_exactly_one_checkpoint_callback(fou
     with pytest.raises(SystemExit) as stop:
         turn_off_save_last(callbacks)
     message = str(stop.value)
-    assert f"found {found}" in message and "last_checkpoint.py" in message
+    assert f"found {found}" in message and "checkpoints.py" in message
     # and nothing was changed
     assert all(callback.save_last is True for callback in upstreams)
 
@@ -226,7 +227,7 @@ def a_checkpoint(step: int) -> dict:
 @needs(*LIGHTNING)
 def test_a_save_writes_the_bytes_that_lightning_writes(tmp_path):
     """Only where and how the file is written changes, not what it holds."""
-    from experiments.last_checkpoint import WholeFileCheckpointIO
+    from experiments.checkpoints import WholeFileCheckpointIO
     from lightning_fabric.plugins.io.torch_io import TorchCheckpointIO
 
     WholeFileCheckpointIO().save_checkpoint(a_checkpoint(6), tmp_path / "ours" / "best.ckpt")
@@ -241,7 +242,7 @@ def test_a_save_writes_the_bytes_that_lightning_writes(tmp_path):
 def test_a_save_syncs_the_part_file_before_it_takes_the_name(tmp_path, monkeypatch):
     import os
 
-    from experiments.last_checkpoint import WholeFileCheckpointIO
+    from experiments.checkpoints import WholeFileCheckpointIO
 
     done = []
     real_fsync, real_replace = os.fsync, os.replace
@@ -257,7 +258,7 @@ def test_a_save_syncs_the_part_file_before_it_takes_the_name(tmp_path, monkeypat
 @needs(*LIGHTNING)
 def test_a_save_that_dies_midway_leaves_the_checkpoint_before_whole(tmp_path, monkeypatch):
     import torch
-    from experiments.last_checkpoint import WholeFileCheckpointIO
+    from experiments.checkpoints import WholeFileCheckpointIO
 
     target = tmp_path / "best.ckpt"
     WholeFileCheckpointIO().save_checkpoint(a_checkpoint(2), target)
@@ -281,7 +282,7 @@ def test_a_save_that_dies_midway_leaves_the_checkpoint_before_whole(tmp_path, mo
 
 @needs(*LIGHTNING)
 def test_a_save_with_storage_options_is_refused_as_lightning_refuses_it(tmp_path):
-    from experiments.last_checkpoint import WholeFileCheckpointIO
+    from experiments.checkpoints import WholeFileCheckpointIO
 
     with pytest.raises(TypeError):
         WholeFileCheckpointIO().save_checkpoint(a_checkpoint(6), tmp_path / "best.ckpt",
@@ -316,7 +317,7 @@ def dies_at_the_second_write_of(name: str):
 def test_a_kill_during_a_write_leaves_both_checkpoints_whole(killed, best_step, last_step,
                                                              tmp_path, monkeypatch):
     import torch
-    from experiments.last_checkpoint import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
+    from experiments.checkpoints import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
 
     callbacks = [upstream_checkpoint(tmp_path)]
     turn_off_save_last(callbacks)
@@ -329,3 +330,19 @@ def test_a_kill_during_a_write_leaves_both_checkpoints_whole(killed, best_step, 
     assert best["global_step"] == best_step and best_score_inside(best) == pytest.approx(0.3)
     assert last["global_step"] == last_step              # the validation before the kill
     assert (tmp_path / f"{killed}.part").exists()
+
+
+def test_the_module_imports_nothing_of_this_repository():
+    """It is about Lightning only, so that it can be read and used on its own."""
+    import ast
+
+    tree = ast.parse((ROOT / "experiments" / "checkpoints.py").read_text())
+    imported = {alias.name.split(".")[0] for node in ast.walk(tree)
+                if isinstance(node, ast.Import) for alias in node.names}
+    imported |= {node.module.split(".")[0] for node in ast.walk(tree)
+                 if isinstance(node, ast.ImportFrom) and node.module and not node.level}
+    assert not any(isinstance(node, ast.ImportFrom) and node.level for node in ast.walk(tree))
+    # every package and module of segment-any-sign/ and of the repository root
+    ours = {path.stem for folder in (ROOT, ROOT.parent) for path in folder.iterdir()
+            if path.suffix == ".py" or (path / "__init__.py").exists()}
+    assert imported and not imported & ours, imported & ours

@@ -892,7 +892,7 @@ def test_add_result_row_writes_the_step_of_best(run_folder, tmp_path, monkeypatc
 @needs(*UPSTREAM)
 def test_main_has_last_ckpt_written_by_last_checkpoint_alone(project, monkeypatch):
     """The trainer that upstream's `train()` builds: its save_last off, LastCheckpoint added."""
-    from experiments.last_checkpoint import LastCheckpoint
+    from experiments.checkpoints import LastCheckpoint
     from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
     built = {}
@@ -926,7 +926,7 @@ def test_main_writes_every_checkpoint_of_the_run_whole(project, monkeypatch):
     A plugin that upstream would give the trainer is kept beside it.
     """
     import pytorch_lightning
-    from experiments.last_checkpoint import WholeFileCheckpointIO
+    from experiments.checkpoints import WholeFileCheckpointIO
     from lightning_fabric.plugins.environments import LightningEnvironment
     from pytorch_lightning.callbacks import ModelCheckpoint
 

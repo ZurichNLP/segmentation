@@ -83,7 +83,7 @@ under matching names, so W&B can overlay the two curves — see
 Validation runs **every epoch** (upstream's default), and the best checkpoint
 maximises `validation_mean_mf1s` — see `--select-on`. A run folder keeps two
 checkpoints: `best.ckpt`, written when that metric improves, and `last.ckpt`,
-the last validation, written again at every validation (`last_checkpoint.py`).
+the last validation, written again at every validation (`checkpoints.py`).
 
 When training ends the best checkpoint is scored **on validation**, into
 `experiments/predictions/`. Test is reserved for the one model finally reported:
@@ -367,7 +367,7 @@ def main() -> None:
     # without it Lightning requires the interval to fit inside one epoch, which
     # 100 steps does not on DGS (10 steps per epoch). Wrapped in a shim rather
     # than mutating the pytorch_lightning module itself.
-    from experiments.last_checkpoint import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
+    from experiments.checkpoints import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
 
     class _TrainerShim:
         def __init__(self, module, extra):
@@ -618,7 +618,7 @@ def main() -> None:
     # panels follow the *running best* model: redrawn only when `monitor`
     # improves, which is the same test ModelCheckpoint applies, so the figure in
     # W&B always belongs to the checkpoint on disk
-    # last.ckpt, the last validation, written again at each (last_checkpoint.py)
+    # last.ckpt, the last validation, written again at each (checkpoints.py)
     callbacks = [LastCheckpoint(run_dir)]
     if not args.no_wandb:
         from experiments.plot_callback import SegmentationPlotCallback
@@ -629,7 +629,7 @@ def main() -> None:
         callbacks.append(SampleScheduleCallback(mine.max_steps,
                                                 shape=mine.sample_schedule))
     trainer_extra["callbacks"] = callbacks
-    # every checkpoint, best.ckpt and last.ckpt, written whole (last_checkpoint.py)
+    # every checkpoint, best.ckpt and last.ckpt, written whole (checkpoints.py)
     trainer_extra["plugins"] = [WholeFileCheckpointIO()]
 
     # train() takes monitor_metric, so both ModelCheckpoint and EarlyStopping

@@ -78,7 +78,7 @@ class LastCheckpoint(ModelCheckpoint):
             raise SystemExit(
                 "LastCheckpoint needs a trainer given WholeFileCheckpointIO in its "
                 "plugins: without it a kill during a write would truncate last.ckpt. "
-                "See experiments/last_checkpoint.py.")
+                "See experiments/checkpoints.py.")
 
     def on_validation_end(self, trainer, pl_module) -> None:
         if (trainer.sanity_checking or trainer.fast_dev_run
@@ -109,7 +109,7 @@ def turn_off_save_last(callbacks: list) -> ModelCheckpoint:
         raise SystemExit(
             f"upstream's training was to give the trainer one ModelCheckpoint, which "
             f"writes best.ckpt; found {len(found)}: {[type(c).__name__ for c in callbacks]}. "
-            f"experiments/last_checkpoint.py turns off its save_last, because "
+            f"experiments/checkpoints.py turns off its save_last, because "
             f"LastCheckpoint writes last.ckpt; see its docstring before changing either.")
     found[0].save_last = False
     return found[0]
