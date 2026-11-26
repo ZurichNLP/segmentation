@@ -40,7 +40,11 @@ frame F1 once, and IoU, `%` and mF1S once for each decoder (see the paragraph on
 the other decoders below). Measured in November 2026 on an Apple M3 Max laptop,
 on the labels of the 12 DGS validation clips in
 `experiments/predictions/05_dgs_w1-5-1_s42.json` (18 clip-levels with gold):
-0.10 s for frame F1, and 0.11 to 0.12 s for each decoder.
+0.10 s for frame F1, and 0.11 to 0.12 s for each decoder. Each is the best of
+three runs, timed with `time.perf_counter`, of a loop over the 18 that calls
+what `_accumulate` calls on the stored BIO labels: `frame_f1` and
+`frame_f1_micro` for frame F1, and for a decoder its `decode`, then
+`global_iou`, `segment_percentage` and `segment_counts`.
 
 **The other decoders are scored at validation too**: IoU, `%` and mF1S of each
 decoder that is not the decoder of the run, logged for each validation set under
