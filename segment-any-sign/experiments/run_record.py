@@ -46,8 +46,8 @@ def source_of(file: str | Path) -> dict:
     "sha256" its hash, so that a copy can be checked against it.
     "global_step" is the step of a checkpoint, and "record" the record of the
     run that wrote it, both from one load. Each is None when the file keeps
-    none: an export keeps neither, upstream's slim checkpoint no step, and a
-    checkpoint written before checkpoints kept a record no record.
+    none: upstream's export and its slim checkpoint keep neither, and a
+    checkpoint written before checkpoints kept a record keeps no record.
     """
     import hashlib
 
