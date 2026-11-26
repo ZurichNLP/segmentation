@@ -378,8 +378,8 @@ def main() -> None:
             return getattr(self._module, name)
 
         def Trainer(self, *args, **kwargs):
-            # last.ckpt is written by LastCheckpoint, at every validation; upstream's
-            # own last.ckpt, a copy of best.ckpt, is turned off
+            # last.ckpt is written by the callback of last_checkpoint, at every
+            # validation; upstream's own last.ckpt, a copy of best.ckpt, is turned off
             turn_off_save_last(kwargs.get("callbacks") or [])
             merged = {**kwargs, **self._extra}
             # callbacks are *added* to upstream's, never substituted for them:

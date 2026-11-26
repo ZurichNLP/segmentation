@@ -4,15 +4,14 @@ Run from `segment-any-sign/`:
     pytest tests/test_checkpoints.py
 
 A run folder keeps `best.ckpt`, which upstream's ModelCheckpoint writes when
-the selection metric improves, and `last.ckpt`, which `LastCheckpoint` writes
-at every validation. The trainings here are of a module with one weight, on
-CPU, in pytest's tmp_path, validated every two steps across epochs as
-`train.py` validates. Its metric at each validation is given by the test. The
+the selection metric improves, and `last.ckpt`, which the callback of
+`last_checkpoint` writes at every validation. The trainings here are of a
+module with one weight, on CPU, in pytest's tmp_path, validated every two
+steps across epochs as `train.py` validates. Its metric at each validation is given by the test. The
 tests that need Lightning are marked with `needs` and skipped, with the
 missing packages named, where it is not installed.
 """
 
-import types
 from pathlib import Path
 
 import pytest
@@ -123,76 +122,13 @@ def test_a_run_keeps_its_best_and_its_last_validation(metrics, best_step, best_s
     assert not [line for line in logged if "weights_only" in line]
 
 
-class TrainerThatSaves:
-    """Stands for a trainer in a fit: `save` writes the checkpoint to the path it is given.
-
-    The options that `save_checkpoint` was given, `weights_only` among them,
-    are kept in `options`, one dictionary for each save.
-    """
-
-    def __init__(self, save, sanity_checking=False, fitting=True, fast_dev_run=False):
-        from pytorch_lightning.trainer.states import TrainerFn
-
-        self.options = []
-
-        def save_checkpoint(path, **options):
-            self.options.append(options)
-            return save(path)
-
-        self.save_checkpoint = save_checkpoint
-        self.sanity_checking, self.fast_dev_run = sanity_checking, fast_dev_run
-        self.state = types.SimpleNamespace(
-            fn=TrainerFn.FITTING if fitting else TrainerFn.VALIDATING)
-        self.is_global_zero = True
-        self.strategy = types.SimpleNamespace(barrier=lambda *names: None)
-
-
-@needs(*LIGHTNING)
-def test_last_checkpoint_asks_the_trainer_for_the_whole_last_ckpt(tmp_path):
-    """The `.part` and the rename are the CheckpointIO's (see WholeFileCheckpointIO)."""
-    from experiments.checkpoints import LastCheckpoint
-
-    saved = []
-    trainer = TrainerThatSaves(saved.append)
-    LastCheckpoint(tmp_path).on_validation_end(trainer, None)
-
-    assert saved == [tmp_path / "last.ckpt"]
-    # the whole state is asked for, not left to the default of Lightning
-    assert trainer.options == [{"weights_only": False}]
-
-
-@needs(*LIGHTNING)
-def test_last_checkpoint_stops_a_fit_without_whole_file_io(tmp_path):
-    """Else last.ckpt would be written in place, and a kill could truncate it."""
-    from experiments.checkpoints import LastCheckpoint, turn_off_save_last
-
-    callbacks = [upstream_checkpoint(tmp_path)]
-    turn_off_save_last(callbacks)
-    with pytest.raises(SystemExit) as stop:
-        train(tmp_path, [0.1, 0.2], callbacks + [LastCheckpoint(tmp_path)])
-    assert "WholeFileCheckpointIO" in str(stop.value)
-    assert list(tmp_path.glob("*.ckpt*")) == []
-
-
-@needs(*LIGHTNING)
-@pytest.mark.parametrize("trainer", [{"sanity_checking": True}, {"fitting": False},
-                                     {"fast_dev_run": True}])
-def test_nothing_is_saved_outside_the_validations_of_a_fit(trainer, tmp_path):
-    from experiments.checkpoints import LastCheckpoint
-
-    saved, folder = [], tmp_path / "run"
-    folder.mkdir()
-    LastCheckpoint(folder).on_validation_end(TrainerThatSaves(saved.append, **trainer), None)
-    assert saved == [] and list(folder.iterdir()) == []
-
-
 @needs(*LIGHTNING)
 def test_save_last_of_upstream_is_turned_off(tmp_path):
-    from experiments.checkpoints import LastCheckpoint, turn_off_save_last
+    from experiments.checkpoints import turn_off_save_last
     from pytorch_lightning.callbacks import EarlyStopping
 
     upstream = upstream_checkpoint(tmp_path)
-    callbacks = [EarlyStopping(monitor="m", mode="max"), upstream, LastCheckpoint(tmp_path)]
+    callbacks = [EarlyStopping(monitor="m", mode="max"), upstream]
     assert turn_off_save_last(callbacks) is upstream
     assert upstream.save_last is False
 
@@ -200,12 +136,11 @@ def test_save_last_of_upstream_is_turned_off(tmp_path):
 @needs(*LIGHTNING)
 @pytest.mark.parametrize("found", [0, 2])
 def test_the_run_stops_unless_upstream_gives_exactly_one_checkpoint_callback(found, tmp_path):
-    from experiments.checkpoints import LastCheckpoint, turn_off_save_last
+    from experiments.checkpoints import turn_off_save_last
     from pytorch_lightning.callbacks import EarlyStopping
 
     upstreams = [upstream_checkpoint(tmp_path / str(n)) for n in range(found)]
-    # LastCheckpoint is a ModelCheckpoint too, and is not counted
-    callbacks = [EarlyStopping(monitor="m", mode="max"), *upstreams, LastCheckpoint(tmp_path)]
+    callbacks = [EarlyStopping(monitor="m", mode="max"), *upstreams]
     with pytest.raises(SystemExit) as stop:
         turn_off_save_last(callbacks)
     message = str(stop.value)
