@@ -73,7 +73,8 @@ folder of every key in it, and the python/torch/GPU it ran on — enough to
 reproduce the run from the checkpoint alone. See `write_run_config`. The
 options and the command as typed also go into the config of the W&B run, which
 keeps them after scratch has deleted the run folder. Every checkpoint of the run
-keeps the whole record under the key `run_config` (`ValidationMetricsModel`).
+keeps the whole record under the key `run_config` (`ValidationMetricsModel`);
+`python -m experiments.run_record <checkpoint>` prints it (`run_record.py`).
 
 The full metric set from `../metrics/` is logged on **both** train and validation
 under matching names, so W&B can overlay the two curves — see

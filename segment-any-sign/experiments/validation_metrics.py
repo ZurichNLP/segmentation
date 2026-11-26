@@ -210,6 +210,7 @@ class ValidationMetricsModel(PoseTaggingModel):
         the host of its run: a model is given to other people through the
         export, which drops them.
         """
+        # read back by `run_record.record_of`
         if self.run_config is not None:
             checkpoint["run_config"] = self.run_config
 
