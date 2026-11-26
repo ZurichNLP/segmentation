@@ -10,7 +10,7 @@ Lightning saves a checkpoint to a file in /tmp and then moves it. Where /tmp
 is another mount than the run folder, as on the cluster, the move is a copy
 into the checkpoint, and a kill during it truncates the file. So `train.py`
 gives the trainer `WholeFileCheckpointIO`, through which Lightning writes
-every checkpoint: to `<name>.part`, synced, then renamed over `<name>`. A kill
+every checkpoint: to `<name>.part`, then renamed over `<name>`. A kill
 leaves both checkpoints whole, beside a `.part` that no reader matches. A
 SIGTERM, from a time limit or `scancel`, stops the run at the next training
 batch without saving anything: what is left is `best.ckpt` and the `last.ckpt`
@@ -42,11 +42,12 @@ NAME = "last.ckpt"
 
 
 class WholeFileCheckpointIO(TorchCheckpointIO):
-    """Write a checkpoint to `<name>.part`, sync it, then rename it to `<name>`.
+    """Write a checkpoint to `<name>.part`, then rename it to `<name>`.
 
     A kill at any moment leaves a whole file under that name, the old or the
     new. `torch.save` is given a file object, as in TorchCheckpointIO, so the
-    bytes are the same as its.
+    bytes are the same as its. Not covered, as with Lightning's own save, which
+    does not sync either: a crash of the node in the seconds after a save.
     """
 
     def save_checkpoint(self, checkpoint: dict, path, storage_options=None) -> None:
@@ -57,8 +58,6 @@ class WholeFileCheckpointIO(TorchCheckpointIO):
         part = target.with_name(target.name + ".part")
         with open(part, "wb") as handle:
             torch.save(checkpoint, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
         os.replace(part, target)
 
 

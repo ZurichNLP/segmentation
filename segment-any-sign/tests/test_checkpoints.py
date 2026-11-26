@@ -239,23 +239,6 @@ def test_a_save_writes_the_bytes_that_lightning_writes(tmp_path):
 
 
 @needs(*LIGHTNING)
-def test_a_save_syncs_the_part_file_before_it_takes_the_name(tmp_path, monkeypatch):
-    import os
-
-    from experiments.checkpoints import WholeFileCheckpointIO
-
-    done = []
-    real_fsync, real_replace = os.fsync, os.replace
-    monkeypatch.setattr(os, "fsync", lambda fd: (done.append("fsync"), real_fsync(fd))[1])
-    monkeypatch.setattr(os, "replace", lambda source, target: (
-        done.append(("replace", Path(source).name, Path(target).name)),
-        real_replace(source, target))[1])
-
-    WholeFileCheckpointIO().save_checkpoint(a_checkpoint(6), tmp_path / "best.ckpt")
-    assert done == ["fsync", ("replace", "best.ckpt.part", "best.ckpt")]
-
-
-@needs(*LIGHTNING)
 def test_a_save_that_dies_midway_leaves_the_checkpoint_before_whole(tmp_path, monkeypatch):
     import torch
     from experiments.checkpoints import WholeFileCheckpointIO
