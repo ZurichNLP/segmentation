@@ -739,3 +739,144 @@ def test_main_gives_the_checkpoints_of_the_run_its_record(project, tmp_path, mon
     checkpoint = stored(written[0])
     assert checkpoint["run_config"] == record
     assert checkpoint["hyper_parameters"]["decode"] == record["args"]["decode"] == "i-runs-kept"
+
+
+# --- the readers of a run folder: the best checkpoint --------------------------
+
+#: the run folder of these tests, under `outputs.dist` of the paths file
+RUN = "00_run-2026.11.26"
+
+
+@pytest.fixture
+def run_folder(tmp_path, monkeypatch):
+    """A run folder with a best.ckpt and a later last.ckpt that differ in everything.
+
+    best.ckpt is step 6 and keeps the decoder `b-ignoring`; last.ckpt, written
+    after it, is step 12 with other weights and keeps `i-runs-kept`, as when
+    the last validation is not the best one. Returns the folder and the steps
+    and decoders by file name.
+    """
+    import paths
+    import torch
+    from experiments.validation_metrics import ValidationMetricsModel
+    from metrics import get_decoder
+
+    from tests.test_decoder_use import SMALL, checkpoint_of
+
+    folder = paths.output("dist") / RUN
+    folder.mkdir(parents=True)
+    kept = {"best.ckpt": (6, "b-ignoring"), "last.ckpt": (12, "i-runs-kept")}
+    for when, (name, (step, decoder)) in enumerate(kept.items()):
+        monkeypatch.setattr(ValidationMetricsModel, "decoder", get_decoder(decoder))
+        path = checkpoint_of(ValidationMetricsModel(**SMALL), folder / name)
+        state = torch.load(path, map_location="cpu", weights_only=False)
+        state["global_step"] = step
+        torch.save(state, path)
+        os.utime(path, (1_000_000 + when, 1_000_000 + when))     # last.ckpt is newer
+    return folder, kept
+
+
+def weights_of(path: Path) -> dict:
+    import torch
+
+    return torch.load(path, map_location="cpu", weights_only=False)["state_dict"]
+
+
+@needs(*UPSTREAM)
+def test_the_fixture_has_two_different_checkpoints(run_folder):
+    import torch
+
+    folder, _ = run_folder
+    best, last = weights_of(folder / "best.ckpt"), weights_of(folder / "last.ckpt")
+    assert not all(torch.equal(best[key], last[key]) for key in best)
+    assert (folder / "last.ckpt").stat().st_mtime > (folder / "best.ckpt").stat().st_mtime
+
+
+@needs(*UPSTREAM)
+def test_newest_checkpoint_takes_best_unless_asked_for_last(run_folder):
+    """Used by eval_youtube.py, plot_segmentation.py and add_result_row.py."""
+    from experiments.plot_segmentation import newest_checkpoint
+
+    folder, _ = run_folder
+    assert newest_checkpoint(folder) == folder / "best.ckpt"
+    assert newest_checkpoint(folder, "best") == folder / "best.ckpt"
+    assert newest_checkpoint(folder, "last") == folder / "last.ckpt"
+
+
+@needs(*UPSTREAM)
+def test_the_end_of_training_predicts_with_best(run_folder, monkeypatch):
+    import subprocess
+
+    from experiments.train import evaluate_best_checkpoint
+
+    folder, _ = run_folder
+    steps = []
+
+    def ran(step, **options):
+        steps.append(step)
+        return subprocess.CompletedProcess(step, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", ran)
+    evaluate_best_checkpoint(folder, phrase="glosses", split="validation",
+                             plot_datasets="dgs_corpus")
+    [predict] = [step for step in steps if step[1].endswith("predict_dgs_2026.py")]
+    assert predict[predict.index("--model") + 1] == str(folder / "best.ckpt")
+    [plot] = [step for step in steps if step[1].endswith("plot_segmentation.py")]
+    assert "--which" not in plot                       # so its default, best
+
+
+@needs(*UPSTREAM)
+def test_the_loaders_given_a_run_folder_load_best(run_folder):
+    import torch
+    from benchmark.predict_dgs_2026 import load_checkpoint, stored_decode
+
+    from sign_language_segmentation.bin import _load_model_uncached
+
+    folder, kept = run_folder
+    best = weights_of(folder / "best.ckpt")
+    for model in (load_checkpoint(str(folder)), _load_model_uncached(model_dir=str(folder))):
+        assert all(torch.equal(model.state_dict()[key], value) for key, value in best.items())
+    assert stored_decode(folder) == kept["best.ckpt"][1]
+    assert load_checkpoint(str(folder)).stored_decode == kept["best.ckpt"][1]
+
+
+@needs(*UPSTREAM)
+@pytest.mark.parametrize("script", ["eval_youtube", "plot_segmentation"])
+def test_the_scripts_given_a_run_take_best_by_default(script, run_folder, monkeypatch):
+    import importlib
+
+    from tests.test_decoder_use import Reached
+
+    module = importlib.import_module(f"experiments.{script}")
+    function = {"eval_youtube": "score", "plot_segmentation": "collect"}[script]
+
+    def opened(checkpoint, *arguments, **options):
+        raise Reached(checkpoint)
+
+    monkeypatch.setattr(module, function, opened)
+    monkeypatch.setattr(sys, "argv", [f"{script}.py", "--run", RUN, "--device", "cpu"]
+                        + (["--datasets", "dgs_corpus"] if script == "plot_segmentation"
+                           else []))
+    with pytest.raises(Reached) as reached:
+        module.main()
+    assert reached.value.args[0] == run_folder[0] / "best.ckpt"
+
+
+@needs(*UPSTREAM)
+def test_add_result_row_writes_the_step_of_best(run_folder, tmp_path, monkeypatch):
+    from experiments import add_result_row
+
+    scores = {"frame_f1": 0.5, "iou": 0.5, "percentage": 1.0, "mf1s": 0.5,
+              "decode": "b-honouring"}
+    youtube = tmp_path / "youtube_dev.json"
+    youtube.write_text(json.dumps({"raw": scores, "filtered": scores}))
+    readme = tmp_path / "README.md"
+    readme.write_text(f"{add_result_row.TABLE_ANCHOR}\n|---|\n| 1 | `earlier` |\n")
+    monkeypatch.setattr(sys, "argv", ["add_result_row.py", "--run", RUN, "--note", "x",
+                                      "--youtube", str(youtube),
+                                      "--dgs", str(tmp_path / "no_dgs.json"),
+                                      "--readme", str(readme)])
+    add_result_row.main()
+
+    row = readme.read_text().splitlines()[-1]
+    assert row.startswith(f"| 2 | `{RUN}` | x | {run_folder[1]['best.ckpt'][0]} |")
