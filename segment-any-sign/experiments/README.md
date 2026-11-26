@@ -41,6 +41,8 @@ Nothing a run writes is in the repository. Each folder is a key of the paths fil
 
 `run_config.json` also records the command of the run as it was typed, under `command_as_typed`, and every option of `train.py` as it was given or as its default, under `options`. Its `command` is the line without the options of `train.py`, and a file without `options` has only that line. `options` and `command_as_typed` also go into the config of the W&B run, the copy that stays when scratch deletes the run folder after 30 days.
 
+A run folder keeps two checkpoints: `best.ckpt`, the validation with the best selection metric, and `last.ckpt`, the last validation, written again at every validation ([`last_checkpoint.py`](last_checkpoint.py)). In a run folder whose `run_config.json` has no `options`, `last.ckpt` is a copy of `best.ckpt`: compare `global_step`. Every script that is given a run folder reads `best.ckpt`; `eval_youtube.py` and `plot_segmentation.py` read `last.ckpt` when given `--which last`.
+
 Every checkpoint of a run keeps that record, as it is in `run_config.json`, under the key `run_config`, beside the weights and the hyperparameters; [`run_record.py`](run_record.py) prints it, or one key of it. A raw checkpoint therefore holds the folders and the host of its run, so a model is given to other people through upstream's export to `model.safetensors` and `config.json`, which drops them.
 
 To submit the pretraining job, from inside `segment-any-sign/` with the `sas` environment active:

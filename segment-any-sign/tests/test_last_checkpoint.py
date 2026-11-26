@@ -1,0 +1,189 @@
+"""The last checkpoint of a run (`experiments/last_checkpoint.py`).
+
+Run from `segment-any-sign/`:
+    pytest tests/test_last_checkpoint.py
+
+A run folder keeps `best.ckpt`, which upstream's ModelCheckpoint writes when
+the selection metric improves, and `last.ckpt`, which `LastCheckpoint` writes
+at every validation. The trainings here are of a module with one weight, on
+CPU, in pytest's tmp_path, validated every two steps across epochs as
+`train.py` validates. Its metric at each validation is given by the test. The
+tests that need Lightning are marked with `needs` and skipped, with the
+missing packages named, where it is not installed.
+"""
+
+import types
+from pathlib import Path
+
+import pytest
+
+from tests.test_locations import needs
+
+LIGHTNING = ("pytorch_lightning", "torch")
+
+
+def upstream_checkpoint(folder, monitor="m"):
+    """Upstream's ModelCheckpoint, with the arguments of its `train()`."""
+    from pytorch_lightning.callbacks import ModelCheckpoint
+
+    return ModelCheckpoint(dirpath=folder, filename="best", verbose=True, save_top_k=1,
+                           save_last=True, monitor=monitor, every_n_epochs=1, mode="max")
+
+
+def train(folder, metrics: list[float], callbacks: list):
+    """Train for two steps per value of `metrics`, logged as `m` at each validation."""
+    import pytorch_lightning as pl
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    class OneWeight(pl.LightningModule):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Linear(1, 1)
+            self.validations = 0
+
+        def training_step(self, batch, index):
+            return self.weight(batch[0]).pow(2).mean()
+
+        def validation_step(self, batch, index):
+            pass
+
+        def on_validation_epoch_end(self):
+            self.log("m", metrics[self.validations])
+            self.validations += 1
+
+        def configure_optimizers(self):
+            return torch.optim.SGD(self.parameters(), lr=0.1)
+
+    model = OneWeight()
+    trainer = pl.Trainer(max_steps=2 * len(metrics), val_check_interval=2,
+                         check_val_every_n_epoch=None, num_sanity_val_steps=0,
+                         logger=False, enable_progress_bar=False,
+                         enable_model_summary=False, accelerator="cpu",
+                         default_root_dir=folder, callbacks=callbacks)
+    trainer.fit(model, DataLoader(TensorDataset(torch.randn(8, 1))),
+                DataLoader(TensorDataset(torch.randn(1, 1))))
+    return model
+
+
+def stored(path):
+    import torch
+
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
+def best_score_inside(checkpoint: dict) -> float:
+    """The best score that upstream's ModelCheckpoint had when `checkpoint` was written."""
+    [state] = [state for key, state in checkpoint["callbacks"].items()
+               if "'monitor': 'm'" in key]
+    return float(state["best_model_score"])
+
+
+@needs(*LIGHTNING)
+@pytest.mark.parametrize("metrics, best_step, best_score", [
+    ([0.1, 0.3, 0.5, 0.4, 0.2, 0.1], 6, 0.5),     # the best validation comes before the end
+    ([0.1, 0.2, 0.3], 6, 0.3),                    # the last validation is the best
+])
+def test_a_run_keeps_its_best_and_its_last_validation(metrics, best_step, best_score,
+                                                       tmp_path):
+    import torch
+    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
+
+    callbacks = [upstream_checkpoint(tmp_path)]
+    turn_off_save_last(callbacks)
+    model = train(tmp_path, metrics, callbacks + [LastCheckpoint(tmp_path)])
+
+    assert sorted(path.name for path in tmp_path.glob("*.ckpt*")) == ["best.ckpt", "last.ckpt"]
+    best, last = stored(tmp_path / "best.ckpt"), stored(tmp_path / "last.ckpt")
+    assert best["global_step"] == best_step
+    assert last["global_step"] == 2 * len(metrics)           # the last validation
+    for key, value in model.state_dict().items():            # the weights of the end
+        assert torch.equal(last["state_dict"][key], value), key
+    # written after upstream's callback has seen the same validation
+    assert best_score_inside(last) == pytest.approx(best_score)
+
+
+class TrainerThatSaves:
+    """Stands for a trainer in a fit: `save` writes the checkpoint to the path it is given."""
+
+    def __init__(self, save, sanity_checking=False, fitting=True, fast_dev_run=False):
+        from pytorch_lightning.trainer.states import TrainerFn
+
+        self.save_checkpoint = save
+        self.sanity_checking, self.fast_dev_run = sanity_checking, fast_dev_run
+        self.state = types.SimpleNamespace(
+            fn=TrainerFn.FITTING if fitting else TrainerFn.VALIDATING)
+        self.is_global_zero = True
+        self.strategy = types.SimpleNamespace(barrier=lambda *names: None)
+
+
+@needs(*LIGHTNING)
+def test_a_save_replaces_last_ckpt_whole(tmp_path):
+    from experiments.last_checkpoint import LastCheckpoint
+
+    (tmp_path / "last.ckpt").write_bytes(b"the validation before")
+    LastCheckpoint(tmp_path).on_validation_end(
+        TrainerThatSaves(lambda path: Path(path).write_bytes(b"this validation")), None)
+
+    assert (tmp_path / "last.ckpt").read_bytes() == b"this validation"
+    assert not (tmp_path / "last.ckpt.part").exists()
+
+
+@needs(*LIGHTNING)
+def test_a_save_that_dies_midway_leaves_the_last_ckpt_before(tmp_path):
+    from experiments.last_checkpoint import LastCheckpoint
+
+    def killed(path):
+        Path(path).write_bytes(b"half of th")
+        raise RuntimeError("killed")
+
+    (tmp_path / "last.ckpt").write_bytes(b"the validation before")
+    with pytest.raises(RuntimeError):
+        LastCheckpoint(tmp_path).on_validation_end(TrainerThatSaves(killed), None)
+
+    assert (tmp_path / "last.ckpt").read_bytes() == b"the validation before"
+    # what is left beside it is matched by no reader of a run folder
+    assert (tmp_path / "last.ckpt.part").read_bytes() == b"half of th"
+    assert [path.name for path in tmp_path.glob("best*.ckpt")] == []
+    assert [path.name for path in tmp_path.glob("last*.ckpt")] == ["last.ckpt"]
+    assert [path.name for path in tmp_path.glob("*.ckpt")] == ["last.ckpt"]
+
+
+@needs(*LIGHTNING)
+@pytest.mark.parametrize("trainer", [{"sanity_checking": True}, {"fitting": False},
+                                     {"fast_dev_run": True}])
+def test_nothing_is_saved_outside_the_validations_of_a_fit(trainer, tmp_path):
+    from experiments.last_checkpoint import LastCheckpoint
+
+    saved, folder = [], tmp_path / "run"
+    folder.mkdir()
+    LastCheckpoint(folder).on_validation_end(TrainerThatSaves(saved.append, **trainer), None)
+    assert saved == [] and list(folder.iterdir()) == []
+
+
+@needs(*LIGHTNING)
+def test_save_last_of_upstream_is_turned_off(tmp_path):
+    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
+    from pytorch_lightning.callbacks import EarlyStopping
+
+    upstream = upstream_checkpoint(tmp_path)
+    callbacks = [EarlyStopping(monitor="m", mode="max"), upstream, LastCheckpoint(tmp_path)]
+    assert turn_off_save_last(callbacks) is upstream
+    assert upstream.save_last is False
+
+
+@needs(*LIGHTNING)
+@pytest.mark.parametrize("found", [0, 2])
+def test_the_run_stops_unless_upstream_gives_exactly_one_checkpoint_callback(found, tmp_path):
+    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
+    from pytorch_lightning.callbacks import EarlyStopping
+
+    upstreams = [upstream_checkpoint(tmp_path / str(n)) for n in range(found)]
+    # LastCheckpoint is a ModelCheckpoint too, and is not counted
+    callbacks = [EarlyStopping(monitor="m", mode="max"), *upstreams, LastCheckpoint(tmp_path)]
+    with pytest.raises(SystemExit) as stop:
+        turn_off_save_last(callbacks)
+    message = str(stop.value)
+    assert f"found {found}" in message and "last_checkpoint.py" in message
+    # and nothing was changed
+    assert all(callback.save_last is True for callback in upstreams)

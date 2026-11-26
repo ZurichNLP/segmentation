@@ -81,7 +81,9 @@ under matching names, so W&B can overlay the two curves — see
 [`validation_metrics.py`](validation_metrics.py).
 
 Validation runs **every epoch** (upstream's default), and the best checkpoint
-maximises `validation_mean_mf1s` — see `--select-on`.
+maximises `validation_mean_mf1s` — see `--select-on`. A run folder keeps two
+checkpoints: `best.ckpt`, written when that metric improves, and `last.ckpt`,
+the last validation, written again at every validation (`last_checkpoint.py`).
 
 When training ends the best checkpoint is scored **on validation**, into
 `experiments/predictions/`. Test is reserved for the one model finally reported:
@@ -362,6 +364,8 @@ def main() -> None:
     # without it Lightning requires the interval to fit inside one epoch, which
     # 100 steps does not on DGS (10 steps per epoch). Wrapped in a shim rather
     # than mutating the pytorch_lightning module itself.
+    from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
+
     class _TrainerShim:
         def __init__(self, module, extra):
             self._module, self._extra = module, extra
@@ -370,6 +374,9 @@ def main() -> None:
             return getattr(self._module, name)
 
         def Trainer(self, *args, **kwargs):
+            # last.ckpt is written by LastCheckpoint, at every validation; upstream's
+            # own last.ckpt, a copy of best.ckpt, is turned off
+            turn_off_save_last(kwargs.get("callbacks") or [])
             merged = {**kwargs, **self._extra}
             # callbacks are *added* to upstream's, never substituted for them:
             # replacing the list would drop ModelCheckpoint and EarlyStopping
@@ -603,7 +610,8 @@ def main() -> None:
     # panels follow the *running best* model: redrawn only when `monitor`
     # improves, which is the same test ModelCheckpoint applies, so the figure in
     # W&B always belongs to the checkpoint on disk
-    callbacks = []
+    # last.ckpt, the last validation, written again at each (last_checkpoint.py)
+    callbacks = [LastCheckpoint(run_dir)]
     if not args.no_wandb:
         from experiments.plot_callback import SegmentationPlotCallback
         callbacks.append(SegmentationPlotCallback(run_dir, val_names, monitor,
@@ -612,8 +620,7 @@ def main() -> None:
         from experiments.sample_schedule import SampleScheduleCallback
         callbacks.append(SampleScheduleCallback(mine.max_steps,
                                                 shape=mine.sample_schedule))
-    if callbacks:
-        trainer_extra["callbacks"] = callbacks
+    trainer_extra["callbacks"] = callbacks
 
     # train() takes monitor_metric, so both ModelCheckpoint and EarlyStopping
     # follow it without patching anything
