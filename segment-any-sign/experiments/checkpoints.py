@@ -61,6 +61,16 @@ class WholeFileCheckpointIO(TorchCheckpointIO):
         os.replace(part, target)
 
 
+def last_checkpoint(dirpath) -> ModelCheckpoint:
+    """The callback that writes `last.ckpt` in `dirpath` at every validation of a fit.
+
+    A stock ModelCheckpoint that monitors nothing keeps one file, the latest,
+    under the name `last.ckpt`; the trainer's WholeFileCheckpointIO writes it whole.
+    """
+    return ModelCheckpoint(dirpath=dirpath, filename="last", monitor=None, save_top_k=1,
+                           save_last=False, enable_version_counter=False)
+
+
 class LastCheckpoint(ModelCheckpoint):
     """Write `last.ckpt` in `dirpath` at the end of every validation of a fit.
 

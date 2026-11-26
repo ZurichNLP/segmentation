@@ -368,7 +368,7 @@ def main() -> None:
     # without it Lightning requires the interval to fit inside one epoch, which
     # 100 steps does not on DGS (10 steps per epoch). Wrapped in a shim rather
     # than mutating the pytorch_lightning module itself.
-    from experiments.checkpoints import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
+    from experiments.checkpoints import WholeFileCheckpointIO, last_checkpoint, turn_off_save_last
 
     class _TrainerShim:
         def __init__(self, module, extra):
@@ -620,7 +620,7 @@ def main() -> None:
     # improves, which is the same test ModelCheckpoint applies, so the figure in
     # W&B always belongs to the checkpoint on disk
     # last.ckpt, the last validation, written again at each (checkpoints.py)
-    callbacks = [LastCheckpoint(run_dir)]
+    callbacks = [last_checkpoint(run_dir)]
     if not args.no_wandb:
         from experiments.plot_callback import SegmentationPlotCallback
         callbacks.append(SegmentationPlotCallback(run_dir, val_names, monitor,

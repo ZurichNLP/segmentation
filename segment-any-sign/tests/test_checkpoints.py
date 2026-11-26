@@ -91,7 +91,7 @@ def test_a_run_keeps_its_best_and_its_last_validation(metrics, best_step, best_s
     import logging
 
     import torch
-    from experiments.checkpoints import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
+    from experiments.checkpoints import WholeFileCheckpointIO, last_checkpoint, turn_off_save_last
 
     # Lightning's own logger does not pass its records on to the root logger,
     # where caplog listens, so they are kept here
@@ -103,7 +103,7 @@ def test_a_run_keeps_its_best_and_its_last_validation(metrics, best_step, best_s
     callbacks = [upstream_checkpoint(tmp_path)]
     turn_off_save_last(callbacks)
     try:
-        model = train(tmp_path, metrics, callbacks + [LastCheckpoint(tmp_path)],
+        model = train(tmp_path, metrics, callbacks + [last_checkpoint(tmp_path)],
                       plugins=[WholeFileCheckpointIO()])
     finally:
         lightning.removeHandler(keep)
@@ -300,13 +300,13 @@ def dies_at_the_second_write_of(name: str):
 def test_a_kill_during_a_write_leaves_both_checkpoints_whole(killed, best_step, last_step,
                                                              tmp_path, monkeypatch):
     import torch
-    from experiments.checkpoints import LastCheckpoint, WholeFileCheckpointIO, turn_off_save_last
+    from experiments.checkpoints import WholeFileCheckpointIO, last_checkpoint, turn_off_save_last
 
     callbacks = [upstream_checkpoint(tmp_path)]
     turn_off_save_last(callbacks)
     monkeypatch.setattr(torch, "save", dies_at_the_second_write_of(killed))
     with pytest.raises(RuntimeError):
-        train(tmp_path, [0.3, 0.1, 0.2, 0.5], callbacks + [LastCheckpoint(tmp_path)],
+        train(tmp_path, [0.3, 0.1, 0.2, 0.5], callbacks + [last_checkpoint(tmp_path)],
               plugins=[WholeFileCheckpointIO()])
 
     best, last = stored(tmp_path / "best.ckpt"), stored(tmp_path / "last.ckpt")

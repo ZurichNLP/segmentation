@@ -891,8 +891,7 @@ def test_add_result_row_writes_the_step_of_best(run_folder, tmp_path, monkeypatc
 
 @needs(*UPSTREAM)
 def test_main_has_last_ckpt_written_by_last_checkpoint_alone(project, monkeypatch):
-    """The trainer that upstream's `train()` builds: its save_last off, LastCheckpoint added."""
-    from experiments.checkpoints import LastCheckpoint
+    """The trainer that upstream's `train()` builds: its save_last off, last.ckpt's callback added."""
     from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
     built = {}
@@ -913,7 +912,7 @@ def test_main_has_last_ckpt_written_by_last_checkpoint_alone(project, monkeypatc
     trainer, upstream = built["trainer"], built["upstream"]
     assert upstream.save_last is False
     [last] = [callback for callback in trainer.callbacks
-              if isinstance(callback, LastCheckpoint)]
+              if isinstance(callback, ModelCheckpoint) and callback.filename == "last"]
     assert Path(last.dirpath) == (Path("dist") / record["run_id"]).resolve()
     # Lightning runs it after upstream's callback, which it was given before
     assert trainer.callbacks.index(last) > trainer.callbacks.index(upstream)
