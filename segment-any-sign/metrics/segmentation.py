@@ -265,7 +265,8 @@ def greedy_match(matrix: np.ndarray) -> list[float]:
     A tie goes to the earlier gold segment (row), then to the earlier predicted
     one (column). Once no free pair overlaps, the free rows and columns are
     paired in order, so the list ends with their zeros and has one value for
-    each gold or each predicted segment, whichever are fewer.
+    each gold or each predicted segment, whichever are fewer. An empty input
+    gives [] whatever its shape; any other input must be 2-D.
 
     The pairs are sorted once, and a pair is taken when its row and its column
     are both free; searching the matrix again after each pair took seconds for
@@ -275,6 +276,9 @@ def greedy_match(matrix: np.ndarray) -> list[float]:
     loop and checks that the list is the same, bit for bit.
     """
     matrix = np.asarray(matrix, dtype=float)
+    if matrix.size == 0:
+        # no pair, as in the first loop, even when the input is not 2-D
+        return []
     if (matrix >= 0).all():
         # IoUs: only the overlapping pairs need an order, every other entry is 0
         rows, columns = np.nonzero(matrix > 0)
