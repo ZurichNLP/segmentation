@@ -24,6 +24,8 @@ far lower. `--select-on hm_iou` restores upstream's choice.
 ([`../metrics/decoders.py`](../metrics/decoders.py)), which `train.py` sets from
 `--decode`; frame F1 does not depend on it. So the decoder decides the selection
 metric too. Its name is kept in every checkpoint, as the hyperparameter `decode`.
+Every checkpoint also keeps the record of its run, the content of its
+run_config.json, under the key `run_config` (`on_save_checkpoint`).
 
 **Train and validation are not measured on the same thing**, and the overlay
 should be read with that in mind: training batches are random 1024-frame windows
@@ -135,6 +137,12 @@ class ValidationMetricsModel(PoseTaggingModel):
     #: checkpoint: see `__init__`.
     decoder = choose_decoder(None)
 
+    #: The record of the run, as in its run_config.json: `train.py` sets it from
+    #: `write_run_config` before the model is built. Every checkpoint keeps it
+    #: under a key of its own, "run_config" (`on_save_checkpoint`). None in a dry
+    #: run and wherever no record was written; no checkpoint gets the key then.
+    run_config = None
+
     #: gradient accumulation, so the LR schedule can be sized in *optimiser*
     #: steps. Upstream is handed batches per epoch and OneCycleLR steps once per
     #: optimiser step, so with accumulation the schedule would be N times too
@@ -154,6 +162,16 @@ class ValidationMetricsModel(PoseTaggingModel):
         # does not keep it: `load_checkpoint` of benchmark/predict_dgs_2026.py
         # reads it from the file.
         self.save_hyperparameters({"decode": self.decoder.name})
+        # The record keeps the decoder too, as `args.decode`; `train.py` sets both
+        # from one decoder (`set_decoder`). A model is not built while the two
+        # differ, so no checkpoint can name two decoders, and a run stops here,
+        # before its first step. Readers take the decoder from `decode` only.
+        if self.run_config is not None:
+            recorded = self.run_config.get("args", {}).get("decode")
+            if recorded != self.decoder.name:
+                raise ValueError(f"the record of the run names the decoder {recorded!r}, "
+                                 f"the model decodes with {self.decoder.name!r}: "
+                                 f"they come from one --decode and must agree")
         if self.accumulate > 1:
             import math
             self.steps_per_epoch = max(1, math.ceil(self.steps_per_epoch
@@ -179,6 +197,22 @@ class ValidationMetricsModel(PoseTaggingModel):
                 del loss_fn.weight
                 loss_fn.register_buffer("weight", weight, persistent=False)
                 setattr(self, attr, loss_fn)
+
+    def on_save_checkpoint(self, checkpoint: dict) -> None:
+        """Keep the record of the run in the checkpoint, so that a copy says how it was trained.
+
+        Lightning calls this for every checkpoint it writes, so `best.ckpt` and
+        `last.ckpt` both keep it. A key of its own beside `state_dict`, not a
+        hyperparameter: upstream's class ignores it when it loads, and upstream's
+        export to safetensors, which copies `hyper_parameters` into config.json,
+        and its `slim_checkpoint` leave it out, as W&B, which is given the
+        hyperparameters, does. A raw checkpoint therefore holds the folders and
+        the host of its run: a model is given to other people through the
+        export, which drops them.
+        """
+        # read back by `run_record.record_of`
+        if self.run_config is not None:
+            checkpoint["run_config"] = self.run_config
 
     #: compute train metrics every N steps. 9 ~= once per epoch at batch 64 over
     #: 586 clips; 1 would roughly double training cost.

@@ -690,6 +690,7 @@ def test_selection_metric_follows_the_decoder_of_the_run(option, selection, monk
         assert logged[f"validation_{level}_frame_f1_micro"] == pytest.approx(4 / 5)
 
 
+@needs("numpy", "sklearn")       # the options of train.py import metrics
 def test_train_refuses_a_decode_that_is_not_a_decoder(monkeypatch, capsys):
     from experiments import train
 

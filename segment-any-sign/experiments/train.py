@@ -67,16 +67,24 @@ scalar summary to the W&B run. A run that leaks documents between splits aborts
 before training rather than producing a number nobody can trust.
 
 It also writes `dist/<run>/run_config.json`: every hyperparameter, the command
-line, the git commit and branch and whether the tree had uncommitted changes,
-the paths file and the folder of every key in it, and the python/torch/GPU it
-ran on — enough to reproduce the run from the checkpoint alone.
+as it was typed, every option of this script as it was given, the git commit
+and branch and whether the tree had uncommitted changes, the paths file and the
+folder of every key in it, and the python/torch/GPU it ran on — enough to
+reproduce the run from the checkpoint alone. See `write_run_config`. The
+options and the command as typed also go into the config of the W&B run, which
+keeps them after scratch has deleted the run folder. Every checkpoint of the run
+keeps the whole record under the key `run_config` (`ValidationMetricsModel`);
+`python -m experiments.run_record <checkpoint>` prints it (`run_record.py`).
 
 The full metric set from `../metrics/` is logged on **both** train and validation
 under matching names, so W&B can overlay the two curves — see
 [`validation_metrics.py`](validation_metrics.py).
 
-Validation runs **every epoch** (upstream's default), and the best checkpoint
-maximises `validation_mean_mf1s` — see `--select-on`.
+Validation runs on a step schedule, every `--val-every` steps: by default 1% of
+the run, and at least once an epoch. The best checkpoint maximises
+`validation_mean_mf1s` — see `--select-on`. A run folder keeps two
+checkpoints: `best.ckpt`, written when that metric improves, and `last.ckpt`,
+the last validation, written again at every validation (`checkpoints.py`).
 
 When training ends the best checkpoint is scored **on validation**, into
 `experiments/predictions/`. Test is reserved for the one model finally reported:
@@ -99,6 +107,7 @@ import functools
 import json
 import math
 import os
+import shlex
 import shutil
 import sys
 from datetime import datetime
@@ -109,11 +118,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import paths
 
 
-def main() -> None:
+def project_parser() -> argparse.ArgumentParser:
+    """The options of this script, which upstream does not know.
+
+    `main()` takes them out of the command line before upstream's `args.py`
+    parses the rest. Each option is one `add_argument` here, and nowhere else.
+    """
     from metrics import decoder_names
 
-    # Take our flags out of argv first: upstream's args.py calls parse_args() at
-    # import time and rejects anything it does not know.
     ours = argparse.ArgumentParser(add_help=False)
     ours.add_argument("--phrase", default="glosses", choices=["glosses", "sentence"])
     ours.add_argument("--dry-run", action="store_true")
@@ -245,7 +257,15 @@ def main() -> None:
                            "and there is no gloss signal), both otherwise. A "
                            "level left out gets no loss, no metrics and no "
                            "weight in the selection metric")
-    mine, rest = ours.parse_known_args()
+    return ours
+
+
+def main() -> None:
+    # Take our flags out of argv first: upstream's args.py calls parse_args() at
+    # import time and rejects anything it does not know.
+    mine, rest = project_parser().parse_known_args()
+    # the options as given, for run_config.json: below, `mine` is resolved in place
+    given = argparse.Namespace(**vars(mine))
     sys.argv = [sys.argv[0]] + rest
 
     # register every dataset before anything asks the registry for one
@@ -335,6 +355,12 @@ def main() -> None:
     available = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") \
         else (os.cpu_count() or 8)
     workers = mine.num_workers or max(1, min(32, available))
+    # recorded: the worker count changes the draws of the augmentation, and the
+    # CPUs of a job are in no other key. It is the budget of workers of the run:
+    # each loader gets at most this number. `_with_workers`, and
+    # `frame_uniform_loader` for the training loader, cap it at the size of the
+    # dataset, and `_split_workers` divides it among the validation sets.
+    args.num_workers = workers
     upstream_train.get_dataloader = get_dataloader_multi
 
     # Validate on a step schedule, not an epoch one. `check_val_every_n_epoch=None`
@@ -342,6 +368,8 @@ def main() -> None:
     # without it Lightning requires the interval to fit inside one epoch, which
     # 100 steps does not on DGS (10 steps per epoch). Wrapped in a shim rather
     # than mutating the pytorch_lightning module itself.
+    from experiments.checkpoints import WholeFileCheckpointIO, last_checkpoint, turn_off_save_last
+
     class _TrainerShim:
         def __init__(self, module, extra):
             self._module, self._extra = module, extra
@@ -350,6 +378,9 @@ def main() -> None:
             return getattr(self._module, name)
 
         def Trainer(self, *args, **kwargs):
+            # last.ckpt is written by the callback of last_checkpoint, at every
+            # validation; upstream's own last.ckpt, a copy of best.ckpt, is turned off
+            turn_off_save_last(kwargs.get("callbacks") or [])
             merged = {**kwargs, **self._extra}
             # callbacks are *added* to upstream's, never substituted for them:
             # replacing the list would drop ModelCheckpoint and EarlyStopping
@@ -357,6 +388,11 @@ def main() -> None:
             if extra_callbacks:
                 merged["callbacks"] = list(kwargs.get("callbacks") or []) + \
                     list(extra_callbacks)
+            # the same for plugins; one may be given alone, not in a list
+            upstream_plugins = kwargs.get("plugins") or []
+            if not isinstance(upstream_plugins, (list, tuple)):
+                upstream_plugins = [upstream_plugins]
+            merged["plugins"] = list(upstream_plugins) + list(self._extra.get("plugins") or [])
             return self._module.Trainer(*args, **merged)
 
     # Everything the user sets is in *gradient* steps. Lightning's
@@ -441,6 +477,8 @@ def main() -> None:
             mine.val_every = max(1, min(mine.max_steps // 100, steps_per_epoch))
 
     trainer_extra["val_check_interval"] = mine.val_every * mine.accumulate
+    # as resolved, for run_config.json and W&B: `options` there holds them as given
+    args.max_steps, args.val_every = mine.max_steps, mine.val_every
 
     # sample train metrics ten times per evaluation, so both curves are smooth
     ValidationMetricsModel.metrics_every_n_steps = max(1, mine.val_every // 10)
@@ -516,6 +554,8 @@ def main() -> None:
             source=mine.weights_from)
     args.class_weighting = weighting
     args.class_weights_from = mine.weights_from or args.datasets.split(",")[0]
+    # the weights themselves, by level in upstream's order (UNK, O, B, I), or None
+    args.class_weights = ValidationMetricsModel.class_weights
 
     # The decoder of the run: --decode, else the default, b-honouring. The person
     # who launches the run chooses it; nothing here derives it from the recipe.
@@ -567,12 +607,20 @@ def main() -> None:
     print(f"  selection    {monitor} (max)\n")
 
     link_slurm_log(run_dir)
-    write_run_config(run_dir, args, mine, monitor)
+    record = write_run_config(run_dir, args, given, monitor)
+    # W&B keeps the record once scratch has deleted the run folder (after 30
+    # days): upstream gives W&B `vars(args)` as the config of the run. Set after
+    # the file is written, so that "args" there does not hold them twice.
+    args.options = record["options"]
+    args.command_as_typed = record["command_as_typed"]
+    # and every checkpoint of the run keeps the record (`on_save_checkpoint`)
+    ValidationMetricsModel.run_config = record
 
     # panels follow the *running best* model: redrawn only when `monitor`
     # improves, which is the same test ModelCheckpoint applies, so the figure in
     # W&B always belongs to the checkpoint on disk
-    callbacks = []
+    # last.ckpt, the last validation, written again at each (checkpoints.py)
+    callbacks = [last_checkpoint(run_dir)]
     if not args.no_wandb:
         from experiments.plot_callback import SegmentationPlotCallback
         callbacks.append(SegmentationPlotCallback(run_dir, val_names, monitor,
@@ -581,8 +629,9 @@ def main() -> None:
         from experiments.sample_schedule import SampleScheduleCallback
         callbacks.append(SampleScheduleCallback(mine.max_steps,
                                                 shape=mine.sample_schedule))
-    if callbacks:
-        trainer_extra["callbacks"] = callbacks
+    trainer_extra["callbacks"] = callbacks
+    # every checkpoint, best.ckpt and last.ckpt, written whole (checkpoints.py)
+    trainer_extra["plugins"] = [WholeFileCheckpointIO()]
 
     # train() takes monitor_metric, so both ModelCheckpoint and EarlyStopping
     # follow it without patching anything
@@ -1109,12 +1158,26 @@ def slurm_log_warning(log_path: str | Path) -> str | None:
         return None
 
 
-def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
+def write_run_config(run_dir: Path, args, mine, monitor: str) -> dict:
     """Record everything needed to reproduce this run, beside its checkpoints.
 
-    Every hyperparameter (upstream's and ours), the exact command line, the
-    state of the code, and the software/hardware it ran on. A checkpoint whose
-    settings cannot be recovered is not a result.
+    Returns the record as it is in the file.
+
+    Every hyperparameter (upstream's and ours), the command line, every option
+    of this script, the state of the code, and the software/hardware it ran on.
+    A checkpoint whose settings cannot be recovered is not a result.
+
+    The command line twice. "command_as_typed" is the command of the process
+    as it was typed (`sys.orig_argv`, interpreter and its options included),
+    quoted so that it can be pasted back into a shell, from `segment-any-sign/`
+    with the environment of the run active. "command" is the python and the
+    part of the line that upstream parsed: the options of this script were
+    already taken out of it. "options" holds every option of this script
+    (`project_parser`) under its name in the namespace, as it was given or as
+    its default, before `main()` resolves any; `mine` is that namespace.
+    "args" holds the values as resolved. A run_config.json without "options"
+    was written before these were recorded, and its "command" is the only
+    command line it has.
 
     The state of the code comes from `provenance.py`, the same check the SLURM
     log prints. Under "code": "commit" and "branch"; "dirty", true or false, or
@@ -1149,9 +1212,11 @@ def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
         "run_id": run_dir.name,
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "command": " ".join([sys.executable.split("/")[-1], *sys.argv]),
+        "command_as_typed": shlex.join(sys.orig_argv),
         "monitor_metric": monitor,
         "ours": {"phrase": mine.phrase, "velocity": mine.velocity,
                  "select_on": mine.select_on, "limit": mine.limit},
+        "options": dict(sorted(vars(mine).items())),
         "args": {k: v for k, v in sorted(vars(args).items())},
         "code": provenance.git_state(Path(__file__).resolve().parent),
         "paths": paths.describe(),
@@ -1159,8 +1224,10 @@ def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
                         "host": platform.node(), "gpu": device_name},
     }
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "run_config.json").write_text(json.dumps(config, indent=2, default=str))
+    text = json.dumps(config, indent=2, default=str)
+    (run_dir / "run_config.json").write_text(text)
     print(f"wrote {run_dir}/run_config.json  (commit {provenance.describe(config['code'])})")
+    return json.loads(text)
 
 
 def write_data_report(run_dir: Path, phrase: str) -> dict:
