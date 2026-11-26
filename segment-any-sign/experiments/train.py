@@ -67,9 +67,10 @@ scalar summary to the W&B run. A run that leaks documents between splits aborts
 before training rather than producing a number nobody can trust.
 
 It also writes `dist/<run>/run_config.json`: every hyperparameter, the command
-line, the git commit and branch and whether the tree had uncommitted changes,
-the paths file and the folder of every key in it, and the python/torch/GPU it
-ran on — enough to reproduce the run from the checkpoint alone.
+as it was typed, every option of this script as it was given, the git commit
+and branch and whether the tree had uncommitted changes, the paths file and the
+folder of every key in it, and the python/torch/GPU it ran on — enough to
+reproduce the run from the checkpoint alone. See `write_run_config`.
 
 The full metric set from `../metrics/` is logged on **both** train and validation
 under matching names, so W&B can overlay the two curves — see
@@ -99,6 +100,7 @@ import functools
 import json
 import math
 import os
+import shlex
 import shutil
 import sys
 from datetime import datetime
@@ -255,6 +257,8 @@ def main() -> None:
     # Take our flags out of argv first: upstream's args.py calls parse_args() at
     # import time and rejects anything it does not know.
     mine, rest = project_parser().parse_known_args()
+    # the options as given, for run_config.json: below, `mine` is resolved in place
+    given = argparse.Namespace(**vars(mine))
     sys.argv = [sys.argv[0]] + rest
 
     # register every dataset before anything asks the registry for one
@@ -576,7 +580,7 @@ def main() -> None:
     print(f"  selection    {monitor} (max)\n")
 
     link_slurm_log(run_dir)
-    write_run_config(run_dir, args, mine, monitor)
+    write_run_config(run_dir, args, given, monitor)
 
     # panels follow the *running best* model: redrawn only when `monitor`
     # improves, which is the same test ModelCheckpoint applies, so the figure in
@@ -1121,9 +1125,21 @@ def slurm_log_warning(log_path: str | Path) -> str | None:
 def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
     """Record everything needed to reproduce this run, beside its checkpoints.
 
-    Every hyperparameter (upstream's and ours), the exact command line, the
-    state of the code, and the software/hardware it ran on. A checkpoint whose
-    settings cannot be recovered is not a result.
+    Every hyperparameter (upstream's and ours), the command line, every option
+    of this script, the state of the code, and the software/hardware it ran on.
+    A checkpoint whose settings cannot be recovered is not a result.
+
+    The command line twice. "command_as_typed" is the command of the process
+    as it was typed (`sys.orig_argv`, interpreter and its options included),
+    quoted so that it can be pasted back into a shell, from `segment-any-sign/`
+    with the environment of the run active. "command" is the python and the
+    part of the line that upstream parsed: the options of this script were
+    already taken out of it. "options" holds every option of this script
+    (`project_parser`) under its name in the namespace, as it was given or as
+    its default, before `main()` resolves any; `mine` is that namespace.
+    "args" holds the values as resolved. A run_config.json without "options"
+    was written before these were recorded, and its "command" is the only
+    command line it has.
 
     The state of the code comes from `provenance.py`, the same check the SLURM
     log prints. Under "code": "commit" and "branch"; "dirty", true or false, or
@@ -1158,9 +1174,11 @@ def write_run_config(run_dir: Path, args, mine, monitor: str) -> None:
         "run_id": run_dir.name,
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "command": " ".join([sys.executable.split("/")[-1], *sys.argv]),
+        "command_as_typed": shlex.join(sys.orig_argv),
         "monitor_metric": monitor,
         "ours": {"phrase": mine.phrase, "velocity": mine.velocity,
                  "select_on": mine.select_on, "limit": mine.limit},
+        "options": dict(sorted(vars(mine).items())),
         "args": {k: v for k, v in sorted(vars(args).items())},
         "code": provenance.git_state(Path(__file__).resolve().parent),
         "paths": paths.describe(),

@@ -39,6 +39,8 @@ Nothing a run writes is in the repository. Each folder is a key of the paths fil
 
 `run_config.json` records, under `paths`, the paths file the run read and the folder of every key in it. So `train.py` reads the whole file when it starts, before any work: a value that is not a location stops the run there, with an error that names the key, also in a key the run does not use. A dry run does the same. `--help` needs no location.
 
+`run_config.json` also records the command of the run as it was typed, under `command_as_typed`, and every option of `train.py` as it was given or as its default, under `options`. Its `command` is the line without the options of `train.py`, and a file without `options` has only that line.
+
 To submit the pretraining job, from inside `segment-any-sign/` with the `sas` environment active:
 
 ```bash

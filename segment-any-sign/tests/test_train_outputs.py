@@ -260,6 +260,94 @@ def test_run_config_records_the_paths_file_and_every_location(tmp_path, paths_fi
     assert sorted(path.name for path in tmp_path.iterdir()) == ["paths.test.yaml", "run"]
 
 
+# --- write_run_config: the command and the options of the project -------------
+
+def values_for_every_option(parser) -> list[str]:
+    """A command line that gives every option of `parser` a value that is not its default.
+
+    Made from the parser itself, so that an option added to it is in the line
+    without a change here. A text has a space, quotes and a `$` in it.
+    """
+    line = []
+    for action in parser._actions:
+        flag = action.option_strings[0]
+        if action.nargs == 0:                           # a flag such as --dry-run
+            line.append(flag)
+        elif action.choices:
+            line += [flag, next(choice for choice in action.choices
+                                if choice != action.default)]
+        elif action.type is int:
+            line += [flag, str((action.default or 0) + 3)]
+        elif action.type is float:
+            line += [flag, str((action.default or 0.0) + 0.5)]
+        else:
+            line += [flag, "two words, 'quoted' and $HOME"]
+    return line
+
+
+def write_record(tmp_path, monkeypatch, typed: list[str], mine) -> dict:
+    """The run_config.json that `write_run_config` writes for a run started with `typed`."""
+    from experiments.train import write_run_config
+
+    monkeypatch.setattr(sys, "orig_argv", typed)
+    write_run_config(tmp_path / "run", argparse.Namespace(), mine, "validation_mean_mf1s")
+    return json.loads((tmp_path / "run" / "run_config.json").read_text())
+
+
+def test_run_config_records_every_option_of_the_project_as_given(tmp_path, monkeypatch):
+    from experiments.train import project_parser
+
+    parser = project_parser()
+    typed = ["python", "experiments/train.py", "--run_name", "00_run",
+             *values_for_every_option(parser)]
+    mine, rest = parser.parse_known_args(typed[2:])
+    assert rest == ["--run_name", "00_run"]           # upstream's, not recorded here
+    defaults = vars(parser.parse_known_args([])[0])
+
+    options = write_record(tmp_path, monkeypatch, typed, mine)["options"]
+
+    # every option of the parser, under its name in the namespace
+    assert set(options) == {action.dest for action in parser._actions}
+    for name, value in vars(mine).items():
+        assert options[name] == value
+        assert value != defaults[name]                # so it was read from the line
+
+
+def test_command_as_typed_gives_the_same_options_when_parsed_again(tmp_path, monkeypatch):
+    import shlex
+
+    from experiments.train import project_parser
+
+    parser = project_parser()
+    typed = ["python", "experiments/train.py", *values_for_every_option(parser)]
+    mine = parser.parse_known_args(typed[2:])[0]
+
+    record = write_record(tmp_path, monkeypatch, typed, mine)
+
+    again = parser.parse_known_args(shlex.split(record["command_as_typed"])[2:])[0]
+    assert vars(again) == vars(mine) == record["options"]
+
+
+@pytest.mark.parametrize("note", ["two words", "it's", 'say "this"', "$HOME and `ls`",
+                                  "", "tab\there", "line\nbreak"])
+def test_command_as_typed_can_be_pasted_back_into_a_shell(note, tmp_path, monkeypatch):
+    import subprocess
+
+    from experiments.train import project_parser
+
+    # the interpreter, by its full name as under SLURM, and its options are part
+    # of what was typed
+    typed = [str(tmp_path / "sas" / "bin" / "python"), "-u", "experiments/train.py",
+             "--note", note, "--limit", "2", "--run_name", "00_run"]
+    mine = project_parser().parse_known_args(typed[3:])[0]
+    command = write_record(tmp_path, monkeypatch, typed, mine)["command_as_typed"]
+
+    # the words bash makes of the command, without running it
+    words = subprocess.run(["bash", "-c", f"set -- {command}; printf '%s\\0' \"$@\""],
+                           capture_output=True, text=True, check=True).stdout
+    assert words.split("\0")[:-1] == typed
+
+
 # --- slurm_log_warning: the log folder that SLURM used -----------------------
 
 def test_slurm_log_warning_is_none_for_a_log_in_the_configured_folder(tmp_path):
@@ -405,3 +493,54 @@ def test_main_with_help_needs_no_location(project, tmp_path, monkeypatch, capsys
     assert "usage:" in capsys.readouterr().out
     assert list(project.iterdir()) == []
     assert not (tmp_path / "outputs").exists()
+
+
+# --- main: the record of a run -----------------------------------------------
+
+def start_training(monkeypatch, *arguments, training=None) -> dict:
+    """`main()` with `arguments`, up to where upstream's training starts; the record it wrote.
+
+    `training`, given the monitored metric, stands for upstream's `train()`; by
+    default nothing is trained. The rest is `start_main` of test_decoder_use.py:
+    no data is read and the names `main()` sets are put back after the test.
+    No SLURM job is linked, also when the tests run inside one.
+    """
+    from tests.test_decoder_use import start_main
+
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    # upstream's training module parses the command line when it is first imported
+    monkeypatch.setattr(sys, "argv", ["train.py"])
+    import sign_language_segmentation.train as upstream_train
+
+    monkeypatch.setattr(upstream_train, "train", training or (lambda monitor_metric: None))
+    # --eval-split none: no end step, whose scripts would read the corpus
+    start_main(monkeypatch, "--eval-split", "none", *arguments)
+    [written] = Path("dist").glob("*/run_config.json")
+    return json.loads(written.read_text())
+
+
+@needs(*UPSTREAM)
+def test_main_records_the_options_as_given_and_the_command_as_typed(project, monkeypatch):
+    import shlex
+
+    typed = ["python", "experiments/train.py", "--sampling", "video", "--note", "two words"]
+    monkeypatch.setattr(sys, "orig_argv", typed)
+    record = start_training(monkeypatch, "--sampling", "video", "--class-weights", "1,5,1",
+                            "--note", "two words")
+
+    assert record["command_as_typed"] == shlex.join(typed)
+    options = record["options"]
+    assert (options["sampling"], options["class_weights"], options["note"],
+            options["limit"]) == ("video", "1,5,1", "two words", 2)
+    # as given, although main() resolves them before the record is written
+    assert options["val_every"] is None and options["max_steps"] is None
+    assert options["decode"] is None and options["levels"] == "auto"
+
+    # the keys of before keep what they held
+    assert set(record) >= {"run_id", "started_at", "command", "monitor_metric", "ours",
+                           "args", "code", "paths", "environment"}
+    assert record["ours"] == {"phrase": "glosses", "velocity": "off",
+                              "select_on": "mean_mf1s", "limit": 2}
+    # "command" is the line upstream parsed: without the options of the project
+    assert record["command"].endswith("train.py --no_wandb --device cpu --datasets dgs_corpus")
+    assert record["args"]["decode"] == "b-honouring" and record["args"]["levels"] == "both"
