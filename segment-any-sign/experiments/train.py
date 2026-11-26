@@ -53,15 +53,8 @@ self-evidently throwaway; a dry run also deletes its own run directory.
                                   checkpoint of the run, and the scripts that run
                                   when training ends read it there.
 
-`--finetune_from` is upstream's: the run starts from the weights of a
-checkpoint, a `.ckpt`, a run folder (its `best.ckpt`) or upstream's safetensors
-export. Upstream's loader builds the model with `load_from_checkpoint`, given
-every model option of the run; `main()` gives it `ValidationMetricsModel`, so
-the model is that of a run without the option, with every tensor of the
-checkpoint. The decoder is `--decode`, else the one kept in the checkpoint,
-else the default. The checkpoint is recorded as `finetune_source`
-(`run_record.source_of`). A checkpoint of another shape stops the run with the
-error of torch when the model is built.
+`--finetune_from` is upstream's: the model of the run starts from the weights
+of a checkpoint. See "Starting from a checkpoint" in [`README.md`](README.md).
 
 `dist` is a link, made here, to the folder `outputs.dist` of the paths file
 (`../paths.py`): a run folder is `dist/<run>` relative to `segment-any-sign/`,
