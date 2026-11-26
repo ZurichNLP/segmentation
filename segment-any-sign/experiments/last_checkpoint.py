@@ -57,7 +57,11 @@ PART = NAME + ".part"
 
 
 class LastCheckpoint(ModelCheckpoint):
-    """Write `last.ckpt` in `dirpath` at the end of every validation of a fit."""
+    """Write `last.ckpt` in `dirpath` at the end of every validation of a fit.
+
+    It keeps the whole state of the training, optimizer included, not only the
+    weights.
+    """
 
     def __init__(self, dirpath):
         # nothing of the parent's to save: no top-k checkpoints and no save_last
@@ -68,7 +72,11 @@ class LastCheckpoint(ModelCheckpoint):
                 or trainer.state.fn != TrainerFn.FITTING):
             return
         folder = Path(self.dirpath)
-        trainer.save_checkpoint(folder / PART)
+        # The whole state of the training: weights, optimizer, schedulers, loops
+        # and callbacks, as upstream's ModelCheckpoint saves best.ckpt. Said
+        # explicitly: left unset, Lightning saves the same and logs a line about
+        # it at every validation.
+        trainer.save_checkpoint(folder / PART, weights_only=False)
         if trainer.is_global_zero:
             os.replace(folder / PART, folder / NAME)
         trainer.strategy.barrier()

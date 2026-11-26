@@ -53,7 +53,8 @@ def train(folder, metrics: list[float], callbacks: list):
             self.validations += 1
 
         def configure_optimizers(self):
-            return torch.optim.SGD(self.parameters(), lr=0.1)
+            # with momentum, so that the optimizer keeps a state of its own
+            return torch.optim.SGD(self.parameters(), lr=0.1, momentum=0.9)
 
     model = OneWeight()
     trainer = pl.Trainer(max_steps=2 * len(metrics), val_check_interval=2,
@@ -86,12 +87,24 @@ def best_score_inside(checkpoint: dict) -> float:
 ])
 def test_a_run_keeps_its_best_and_its_last_validation(metrics, best_step, best_score,
                                                        tmp_path):
+    import logging
+
     import torch
     from experiments.last_checkpoint import LastCheckpoint, turn_off_save_last
 
+    # Lightning's own logger does not pass its records on to the root logger,
+    # where caplog listens, so they are kept here
+    logged = []
+    keep = logging.Handler()
+    keep.emit = lambda record: logged.append(record.getMessage())
+    lightning = logging.getLogger("pytorch_lightning")
+    lightning.addHandler(keep)
     callbacks = [upstream_checkpoint(tmp_path)]
     turn_off_save_last(callbacks)
-    model = train(tmp_path, metrics, callbacks + [LastCheckpoint(tmp_path)])
+    try:
+        model = train(tmp_path, metrics, callbacks + [LastCheckpoint(tmp_path)])
+    finally:
+        lightning.removeHandler(keep)
 
     assert sorted(path.name for path in tmp_path.glob("*.ckpt*")) == ["best.ckpt", "last.ckpt"]
     best, last = stored(tmp_path / "best.ckpt"), stored(tmp_path / "last.ckpt")
@@ -101,15 +114,30 @@ def test_a_run_keeps_its_best_and_its_last_validation(metrics, best_step, best_s
         assert torch.equal(last["state_dict"][key], value), key
     # written after upstream's callback has seen the same validation
     assert best_score_inside(last) == pytest.approx(best_score)
+    # the whole state of the training, the momentum of the weight included
+    assert last["optimizer_states"] and last["optimizer_states"][0]["state"]
+    assert "lr_schedulers" in last and "loops" in last
+    # and no line at each validation about how much of it was saved
+    assert not [line for line in logged if "weights_only" in line]
 
 
 class TrainerThatSaves:
-    """Stands for a trainer in a fit: `save` writes the checkpoint to the path it is given."""
+    """Stands for a trainer in a fit: `save` writes the checkpoint to the path it is given.
+
+    The options that `save_checkpoint` was given, `weights_only` among them,
+    are kept in `options`, one dictionary for each save.
+    """
 
     def __init__(self, save, sanity_checking=False, fitting=True, fast_dev_run=False):
         from pytorch_lightning.trainer.states import TrainerFn
 
-        self.save_checkpoint = save
+        self.options = []
+
+        def save_checkpoint(path, **options):
+            self.options.append(options)
+            return save(path)
+
+        self.save_checkpoint = save_checkpoint
         self.sanity_checking, self.fast_dev_run = sanity_checking, fast_dev_run
         self.state = types.SimpleNamespace(
             fn=TrainerFn.FITTING if fitting else TrainerFn.VALIDATING)
@@ -122,11 +150,13 @@ def test_a_save_replaces_last_ckpt_whole(tmp_path):
     from experiments.last_checkpoint import LastCheckpoint
 
     (tmp_path / "last.ckpt").write_bytes(b"the validation before")
-    LastCheckpoint(tmp_path).on_validation_end(
-        TrainerThatSaves(lambda path: Path(path).write_bytes(b"this validation")), None)
+    trainer = TrainerThatSaves(lambda path: Path(path).write_bytes(b"this validation"))
+    LastCheckpoint(tmp_path).on_validation_end(trainer, None)
 
     assert (tmp_path / "last.ckpt").read_bytes() == b"this validation"
     assert not (tmp_path / "last.ckpt.part").exists()
+    # the whole state is asked for, not left to the default of Lightning
+    assert trainer.options == [{"weights_only": False}]
 
 
 @needs(*LIGHTNING)
