@@ -757,11 +757,13 @@ def start_main(monkeypatch, *arguments) -> None:
     from experiments import train
     from experiments.validation_metrics import ValidationMetricsModel
 
+    import sign_language_segmentation.bin as upstream_bin
     import sign_language_segmentation.train as upstream_train
     from sign_language_segmentation.datasets import common
 
     for name in ("PoseTaggingModel", "get_dataloader", "pl"):
         monkeypatch.setattr(upstream_train, name, getattr(upstream_train, name))
+    monkeypatch.setattr(upstream_bin, "PoseTaggingModel", upstream_bin.PoseTaggingModel)
     monkeypatch.setattr(common, "create_bio", common.create_bio)
     monkeypatch.setattr(common, "open", open, raising=False)
     for name in ("val_dataset_names", "levels", "accumulate", "grad_log_every",

@@ -15,6 +15,9 @@ text as it is, so that `command_as_typed` can be pasted back into a shell, and
 anything else as JSON. Run from `segment-any-sign/`. Exit code 1 when the
 checkpoint keeps no record, 2 when it has no such key.
 
+`source_of` describes the checkpoint a run starts from with `--finetune_from`,
+for the record of that run: its file, its hash, its step and its own record.
+
 The file is read as every loader of ours reads a checkpoint, with
 `weights_only=False`, so only open checkpoints you trust.
 """
@@ -33,6 +36,30 @@ def record_of(checkpoint: str | Path) -> dict | None:
 
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
     return state.get("run_config")
+
+
+def source_of(file: str | Path) -> dict:
+    """What identifies the weights a run starts from (`--finetune_from` of train.py).
+
+    `file` is the file upstream's loader reads: a `.ckpt`, or the
+    `model.safetensors` of upstream's export. "file" is its full path and
+    "sha256" its hash, so that a copy can be checked against it.
+    "global_step" is the step of a checkpoint, and "record" the record of the
+    run that wrote it, both from one load. Each is None when the file keeps
+    none: an export keeps neither, upstream's slim checkpoint no step, and a
+    checkpoint written before checkpoints kept a record no record.
+    """
+    import hashlib
+
+    import torch
+
+    path = Path(file)
+    source = {"file": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+              "global_step": None, "record": None}
+    if path.suffix == ".ckpt":
+        state = torch.load(path, map_location="cpu", weights_only=False)
+        source.update(global_step=state.get("global_step"), record=state.get("run_config"))
+    return source
 
 
 def main(argv: list[str] | None = None) -> int:

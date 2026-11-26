@@ -53,6 +53,16 @@ self-evidently throwaway; a dry run also deletes its own run directory.
                                   checkpoint of the run, and the scripts that run
                                   when training ends read it there.
 
+`--finetune_from` is upstream's: the run starts from the weights of a
+checkpoint, a `.ckpt`, a run folder (its `best.ckpt`) or upstream's safetensors
+export. Upstream's loader builds the model with `load_from_checkpoint`, given
+every model option of the run; `main()` gives it `ValidationMetricsModel`, so
+the model is that of a run without the option, with every tensor of the
+checkpoint. The decoder is `--decode`, else the one kept in the checkpoint,
+else the default. The checkpoint is recorded as `finetune_source`
+(`run_record.source_of`). A checkpoint of another shape stops the run with the
+error of torch when the model is built.
+
 `dist` is a link, made here, to the folder `outputs.dist` of the paths file
 (`../paths.py`): a run folder is `dist/<run>` relative to `segment-any-sign/`,
 here and in upstream's training code, so this script must be run from inside
@@ -321,6 +331,18 @@ def main() -> None:
     # metrics without touching upstream code or copying its training loop.
     from experiments.validation_metrics import ValidationMetricsModel
     upstream_train.PoseTaggingModel = ValidationMetricsModel
+    # With --finetune_from, upstream's loader builds the model with
+    # load_from_checkpoint on its own name, given every model option of the run.
+    # On ours, it is the model of a run without the option, with every tensor of
+    # the checkpoint. What identifies the checkpoint goes into the record.
+    if args.finetune_from:
+        from benchmark.predict_dgs_2026 import model_file
+
+        import sign_language_segmentation.bin as upstream_bin
+        from experiments.run_record import source_of
+
+        upstream_bin.PoseTaggingModel = ValidationMetricsModel
+        args.finetune_source = source_of(model_file(args.finetune_from))
 
     # Validate on a list of datasets, not one. Upstream builds a single DEV
     # loader; wrapping `get_dataloader` turns that call into one loader per named
@@ -557,9 +579,12 @@ def main() -> None:
     # the weights themselves, by level in upstream's order (UNK, O, B, I), or None
     args.class_weights = ValidationMetricsModel.class_weights
 
-    # The decoder of the run: --decode, else the default, b-honouring. The person
-    # who launches the run chooses it; nothing here derives it from the recipe.
-    decoder = set_decoder(args, mine.decode)
+    # The decoder of the run: --decode, else the one kept with the checkpoint of
+    # --finetune_from, else the default, b-honouring. The person who launches the
+    # run chooses it; nothing here derives it from the recipe.
+    from benchmark.predict_dgs_2026 import stored_decode
+    decoder = set_decoder(args, mine.decode,
+                          stored_decode(args.finetune_from) if args.finetune_from else None)
 
     report_effective_config(args, mine, _dated_run_name(args.run_name))
     # said once, after the configuration it is about; it changes and stops nothing
@@ -924,12 +949,13 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
     return weights
 
 
-def set_decoder(args, given: str | None):
+def set_decoder(args, given: str | None, stored: str | None = None):
     """Give the run its decoder, in the three places that must agree, and return it.
 
     `given` is the value of `--decode`, by its name of today or an earlier one,
-    or None when the option was not given: then the default
-    (`metrics.choose_decoder`).
+    or None when the option was not given. `stored` is the decoder kept with the
+    checkpoint of `--finetune_from`, or None. The decoder is `given`, else
+    `stored`, else the default (`metrics.choose_decoder`).
 
       * `ValidationMetricsModel.decoder`: validation decodes with it, so the
         selection metric and the checkpoint that is kept follow it;
@@ -941,7 +967,7 @@ def set_decoder(args, given: str | None):
 
     from experiments.validation_metrics import ValidationMetricsModel
 
-    decoder = choose_decoder(given)
+    decoder = choose_decoder(given, stored)
     ValidationMetricsModel.decoder = decoder
     args.decode = decoder.name
     return decoder
@@ -1018,6 +1044,8 @@ def report_effective_config(args, mine, run_name: str) -> None:
           + f"{'' if args.dice_loss_weight == 0 else f' + dice {args.dice_loss_weight:g}'}"
           + f"\n  decoder     {args.decode}  (labels to segments, at validation "
             "and in the checkpoint)"
+          + (f"\n  start from  {args.finetune_source['file']}  (step "
+             f"{args.finetune_source['global_step']}), every tensor" if args.finetune_from else "")
           + (f"\n  LIMIT       {args.limit} clips per split — NOT a reportable run"
              if args.limit else ""))
 
@@ -1390,14 +1418,18 @@ def dry_run(args) -> None:
     print(f"\nbatch          pose {tuple(batch['pose'].shape)}  "
           f"lengths {batch['lengths'].tolist()}")
 
-    model = ValidationMetricsModel(
-        pose_dims=(joints, dims), hidden_dim=args.hidden_dim,
-        encoder_depth=args.encoder_depth, learning_rate=args.learning_rate,
-        steps_per_epoch=len(loaders[Split.TRAIN]), max_epochs=args.epochs,
-        dice_loss_weight=args.dice_loss_weight, optimizer=args.optimizer,
-        attn_nhead=args.attn_nhead, attn_ff_mult=args.attn_ff_mult,
-        attn_dropout=args.attn_dropout, fps_aug=args.fps_aug,
-        frame_dropout=args.frame_dropout, num_frames=args.num_frames)
+    options = {
+        "pose_dims": (joints, dims), "hidden_dim": args.hidden_dim,
+        "encoder_depth": args.encoder_depth, "learning_rate": args.learning_rate,
+        "steps_per_epoch": len(loaders[Split.TRAIN]), "max_epochs": args.epochs,
+        "dice_loss_weight": args.dice_loss_weight, "optimizer": args.optimizer,
+        "attn_nhead": args.attn_nhead, "attn_ff_mult": args.attn_ff_mult,
+        "attn_dropout": args.attn_dropout, "fps_aug": args.fps_aug,
+        "frame_dropout": args.frame_dropout, "num_frames": args.num_frames}
+    # as upstream's train() builds it, so that a dry run loads --finetune_from too
+    model = (upstream_train.load_model(model_dir=args.finetune_from, device="cpu",
+                                       config_overrides=options, eval_mode=False)
+             if args.finetune_from else ValidationMetricsModel(**options))
     print(f"parameters     {sum(p.numel() for p in model.parameters()):,}")
 
     model.eval()

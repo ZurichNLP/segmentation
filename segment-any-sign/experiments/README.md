@@ -54,6 +54,12 @@ sbatch experiments/pretrain_youtube.slurm   # its header documents the arguments
 
 The job runs in the checkout it was submitted from, with the `python` that was on `PATH` at submission. Before training it checks that python, and every location it needs with `python -m paths`, and stops with a message when one cannot be used.
 
+## Starting from a checkpoint
+
+`--finetune_from`, an option of upstream's, takes whatever upstream's loader takes: a `.ckpt`, a run folder, whose `best.ckpt` it reads, or upstream's safetensors export. The model is that of a run without the option, with every setting of the run, and it starts with every tensor of the checkpoint; the optimiser, the learning-rate schedule and the step start anew. The decoder is `--decode`, else the one kept in the checkpoint, else `b-honouring`. The record of the run keeps, under `finetune_source`, the file, its sha256, its step and the record of the run that wrote it, when the checkpoint keeps one. A checkpoint of another shape stops the run when the model is built, with the error of torch: a size mismatch in `frame_cnn.0.encoder_layers.0.0.weight` is `--velocity`, and the other options that shape a tensor are `--hidden_dim`, `--encoder_depth`, `--attn_nhead` and `--attn_ff_mult`. A dry run loads the checkpoint too.
+
+The sign head of the YouTube checkpoint `02_pretrain_youtube_repro-2026.11.23` was never trained, so every run that starts from it starts with the same sign head.
+
 ## What differs 2023 vs 2026, apart from the architecture
 
 Read off both codebases (`v2023 src/` and `main sign_language_segmentation/`). This is the candidate list to ablate.
