@@ -270,10 +270,10 @@ def greedy_match(matrix: np.ndarray) -> list[float]:
 
     The pairs are sorted once, and a pair is taken when its row and its column
     are both free; searching the matrix again after each pair took seconds for
-    a clip of 2,000 signs. Only the overlapping pairs need sorting. So does a
-    matrix with -0.0 and no negative entry, since -0.0 is not below zero; the
-    zeros at the end are read from the matrix, so a -0.0 stays -0.0. A matrix
-    with a negative or NaN entry, which no IoU is, has every pair sorted, NaN
+    a clip of 2,000 signs. Only the overlapping pairs need sorting. A matrix
+    with -0.0 and no negative entry takes this path too, since -0.0 is not
+    below zero, and keeps its -0.0: the zeros at the end are read from the
+    matrix. A matrix with a negative or NaN entry, which no IoU is, has every pair sorted, NaN
     first as `np.argmax` has it. `tests/test_segmentation.py` keeps the first
     loop and checks that the list is the same, bit for bit.
     """
