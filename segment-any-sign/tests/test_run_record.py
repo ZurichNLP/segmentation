@@ -48,6 +48,7 @@ def test_record_of_gives_the_record_the_checkpoint_keeps(checkpoint):
     assert record_of(checkpoint) == {**RECORD, "command_as_typed": TYPED}
 
 
+@needs("torch")                       # the fixture writes a checkpoint
 def test_record_of_gives_none_for_a_checkpoint_written_before(older_checkpoint):
     from experiments.run_record import record_of
 
@@ -84,6 +85,7 @@ def test_the_command_names_the_keys_when_the_key_is_not_there(checkpoint, capsys
     assert "comand" in message and "command_as_typed" in message and "options" in message
 
 
+@needs("torch")                       # the fixture writes a checkpoint
 def test_the_command_says_when_a_checkpoint_keeps_no_record(older_checkpoint, capsys):
     from experiments.run_record import main
 

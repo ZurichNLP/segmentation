@@ -294,6 +294,11 @@ def write_record(tmp_path, monkeypatch, typed: list[str], mine) -> dict:
     return json.loads((tmp_path / "run" / "run_config.json").read_text())
 
 
+#: what `project_parser` needs: it imports `metrics`, which is built on these
+PARSER = ("numpy", "sklearn")
+
+
+@needs(*PARSER)
 def test_run_config_records_every_option_of_the_project_as_given(tmp_path, monkeypatch):
     from experiments.train import project_parser
 
@@ -313,6 +318,7 @@ def test_run_config_records_every_option_of_the_project_as_given(tmp_path, monke
         assert value != defaults[name]                # so it was read from the line
 
 
+@needs(*PARSER)
 def test_command_as_typed_gives_the_same_options_when_parsed_again(tmp_path, monkeypatch):
     import shlex
 
@@ -328,6 +334,7 @@ def test_command_as_typed_gives_the_same_options_when_parsed_again(tmp_path, mon
     assert vars(again) == vars(mine) == record["options"]
 
 
+@needs(*PARSER)
 @pytest.mark.parametrize("note", ["two words", "it's", 'say "this"', "$HOME and `ls`",
                                   "", "tab\there", "line\nbreak"])
 def test_command_as_typed_can_be_pasted_back_into_a_shell(note, tmp_path, monkeypatch):
@@ -582,7 +589,7 @@ def test_main_records_the_values_it_resolves_that_no_other_key_holds(
     assert {key: record["args"][key] for key in expected} == expected
 
 
-@needs(*UPSTREAM)
+@needs(*UPSTREAM, "wandb")              # not a dependency of upstream
 def test_main_sends_the_options_and_the_command_as_typed_to_wandb(project, monkeypatch):
     """What upstream's `train()` gives W&B as the config of the run, with no connection.
 
