@@ -109,11 +109,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import paths
 
 
-def main() -> None:
+def project_parser() -> argparse.ArgumentParser:
+    """The options of this script, which upstream does not know.
+
+    `main()` takes them out of the command line before upstream's `args.py`
+    parses the rest. Each option is one `add_argument` here, and nowhere else.
+    """
     from metrics import decoder_names
 
-    # Take our flags out of argv first: upstream's args.py calls parse_args() at
-    # import time and rejects anything it does not know.
     ours = argparse.ArgumentParser(add_help=False)
     ours.add_argument("--phrase", default="glosses", choices=["glosses", "sentence"])
     ours.add_argument("--dry-run", action="store_true")
@@ -245,7 +248,13 @@ def main() -> None:
                            "and there is no gloss signal), both otherwise. A "
                            "level left out gets no loss, no metrics and no "
                            "weight in the selection metric")
-    mine, rest = ours.parse_known_args()
+    return ours
+
+
+def main() -> None:
+    # Take our flags out of argv first: upstream's args.py calls parse_args() at
+    # import time and rejects anything it does not know.
+    mine, rest = project_parser().parse_known_args()
     sys.argv = [sys.argv[0]] + rest
 
     # register every dataset before anything asks the registry for one
