@@ -12,10 +12,10 @@ into the checkpoint, and a kill during it truncates the file. So `train.py`
 gives the trainer `WholeFileCheckpointIO`, through which Lightning writes
 every checkpoint: to `<name>.part`, then renamed over `<name>`. A kill
 leaves both checkpoints whole, beside a `.part` that no reader matches. A
-SIGTERM, from a time limit or `scancel`, stops the run at the next training
-batch without saving anything: what is left is `best.ckpt` and the `last.ckpt`
-of the last finished validation. SLURM waits KillWait before it sends SIGKILL,
-so a write in progress finishes.
+SIGTERM, from a time limit or `scancel`, stops the run at the next training or
+validation batch without saving anything: what is left is `best.ckpt` and the
+`last.ckpt` of the last finished validation. SLURM waits KillWait before it
+sends SIGKILL, so a write in progress finishes.
 
 Both callbacks are ModelCheckpoints, which Lightning runs after all other
 callbacks and in their order, so `last.ckpt` keeps upstream's state of the

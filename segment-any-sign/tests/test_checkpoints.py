@@ -7,9 +7,9 @@ A run folder keeps `best.ckpt`, which upstream's ModelCheckpoint writes when
 the selection metric improves, and `last.ckpt`, which the callback of
 `last_checkpoint` writes at every validation. The trainings here are of a
 module with one weight, on CPU, in pytest's tmp_path, validated every two
-steps across epochs as `train.py` validates. Its metric at each validation is given by the test. The
-tests that need Lightning are marked with `needs` and skipped, with the
-missing packages named, where it is not installed.
+steps across epochs as `train.py` validates. Its metric at each validation is
+given by the test. The tests that need Lightning are marked with `needs` and
+skipped, with the missing packages named, where it is not installed.
 """
 
 import pytest
