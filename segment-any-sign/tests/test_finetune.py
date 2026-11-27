@@ -126,8 +126,8 @@ def test_source_of_an_export_gives_its_file_and_hash(tmp_path, monkeypatch):
 @pytest.mark.usefixtures("project")
 @pytest.mark.parametrize("options, kept, expected", [
     ([], None, "b-honouring"),                                 # none kept: the default
-    ([], "i-runs-kept", "i-runs-kept"),                        # the decoder of the source
-    (["--decode", "b-ignoring"], "i-runs-kept", "b-ignoring"),  # --decode comes first
+    ([], "i-runs-kept", "b-honouring"),                        # the source's is not used
+    (["--decode", "b-ignoring"], "i-runs-kept", "b-ignoring"),  # the one given
 ])
 def test_main_with_finetune_from_records_the_source_and_the_decoder(
         options, kept, expected, tmp_path, monkeypatch):

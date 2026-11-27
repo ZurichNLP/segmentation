@@ -65,7 +65,7 @@ python experiments/train.py --run_name <NN>_dgs_from_youtube --decode b-honourin
 
 Apart from its weights the run is one from scratch: its options apply, every tensor of the source is loaded, and optimiser, schedule and step start anew. `--lr_scale_backbone` scales the learning rate of the backbone, not of the heads; at its default of 1 both train at one rate, as from scratch.
 
-The decoder is `--decode`, else the one kept in the checkpoint, else `b-honouring`: give `--decode`, so that a run and its control decode alike. `finetune_source` in the record keeps the file, its sha256, its step and its run's record, when kept.
+Only the weights come from the source, not the decoder kept in it: the decoder is `--decode`, else `b-honouring`. `finetune_source` in the record keeps the file, its sha256, its step and its run's record, when kept.
 
 A source of another shape stops the run with torch's error when the model is built, so start with `--dry-run`. A size mismatch in `frame_cnn.0.encoder_layers.0.0.weight` is `--velocity`; any other comes from `--hidden_dim`, `--encoder_depth`, `--attn_nhead` or `--attn_ff_mult`.
 

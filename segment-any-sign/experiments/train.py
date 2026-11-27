@@ -327,16 +327,14 @@ def main() -> None:
     # --finetune_from: upstream's loader builds that model under its own name, with
     # load_from_checkpoint for a .ckpt and from config.json for an export; train.py
     # puts ValidationMetricsModel under that name. How to use it: README.md.
-    stored = None
     if args.finetune_from:
-        from benchmark.predict_dgs_2026 import model_file, stored_decode
+        from benchmark.predict_dgs_2026 import model_file
 
         import sign_language_segmentation.bin as upstream_bin
         from experiments.run_record import source_of
 
         upstream_bin.PoseTaggingModel = ValidationMetricsModel
         args.finetune_source = source_of(model_file(args.finetune_from))
-        stored = stored_decode(args.finetune_from)
 
     # Validate on a list of datasets, not one. Upstream builds a single DEV
     # loader; wrapping `get_dataloader` turns that call into one loader per named
@@ -573,10 +571,9 @@ def main() -> None:
     # the weights themselves, by level in upstream's order (UNK, O, B, I), or None
     args.class_weights = ValidationMetricsModel.class_weights
 
-    # The decoder of the run: --decode, else the one kept with the checkpoint of
-    # --finetune_from, else the default, b-honouring. The person who launches the
-    # run chooses it; nothing here derives it from the recipe.
-    decoder = set_decoder(args, mine.decode, stored)
+    # The decoder of the run: --decode, else the default, b-honouring. The person
+    # who launches the run chooses it; nothing here derives it from the recipe.
+    decoder = set_decoder(args, mine.decode)
 
     report_effective_config(args, mine, _dated_run_name(args.run_name))
     # said once, after the configuration it is about; it changes and stops nothing
@@ -941,13 +938,12 @@ def inverse_class_weights(args, levels, cache_dir: Path = None,
     return weights
 
 
-def set_decoder(args, given: str | None, stored: str | None = None):
+def set_decoder(args, given: str | None):
     """Give the run its decoder, in the three places that must agree, and return it.
 
     `given` is the value of `--decode`, by its name of today or an earlier one,
-    or None when the option was not given. `stored` is the name of the decoder
-    kept with the checkpoint of `--finetune_from`, or None. The decoder is
-    `given`, else `stored`, else the default (`metrics.choose_decoder`).
+    or None when the option was not given: then the default
+    (`metrics.choose_decoder`).
 
       * `ValidationMetricsModel.decoder`: validation decodes with it, so the
         selection metric and the checkpoint that is kept follow it;
@@ -959,7 +955,7 @@ def set_decoder(args, given: str | None, stored: str | None = None):
 
     from experiments.validation_metrics import ValidationMetricsModel
 
-    decoder = choose_decoder(given, stored)
+    decoder = choose_decoder(given)
     ValidationMetricsModel.decoder = decoder
     args.decode = decoder.name
     return decoder
