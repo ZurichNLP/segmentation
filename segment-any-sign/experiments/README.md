@@ -54,6 +54,21 @@ sbatch experiments/pretrain_youtube.slurm   # its header documents the arguments
 
 The job runs in the checkout it was submitted from, with the `python` that was on `PATH` at submission. Before training it checks that python, and every location it needs with `python -m paths`, and stops with a message when one cannot be used.
 
+## Starting from a checkpoint
+
+`--finetune_from`, upstream's option, starts a run from the weights of a `.ckpt`, a run folder (its `best.ckpt`) or upstream's safetensors export, whose float tensors are bf16. From inside `segment-any-sign/` with the `sas` environment active, with the `--max_time` of the recorded DGS runs (upstream's default stops a run after 30 minutes):
+
+```bash
+python experiments/train.py --run_name <NN>_dgs_from_youtube --decode b-honouring \
+    --max_time 00:11:00:00 --finetune_from dist/<run>/best.ckpt
+```
+
+From a `.ckpt`, the run is one from scratch apart from its weights: its options apply, every tensor of the source is loaded, and optimiser, schedule and step start anew. Upstream's export keeps in bf16 the RoPE buffers `inv_freq` too, which are computed, not trained: a run from an export differs from one from scratch in those as well, so a comparison starts from a `.ckpt`. `--lr_scale_backbone` scales the learning rate of the backbone, not of the heads; at its default of 1 both train at one rate, as from scratch.
+
+Only the weights come from the source, not the decoder kept in it: the decoder is `--decode`, else `b-honouring`. `finetune_source` in the record keeps the file, its sha256, its step and its run's record, when kept.
+
+A source of another shape stops the run with torch's error when the model is built, so start with `--dry-run`. A size mismatch in `frame_cnn.0.encoder_layers.0.0.weight` is `--velocity`, any other comes from `--hidden_dim`, `--attn_nhead` or `--attn_ff_mult`, and missing or unexpected keys come from `--encoder_depth`.
+
 ## What differs 2023 vs 2026, apart from the architecture
 
 Read off both codebases (`v2023 src/` and `main sign_language_segmentation/`). This is the candidate list to ablate.
@@ -206,6 +221,8 @@ All phrase level, all dev. **In domain** is the YouTube-SL-25 dev set, given twi
 `step` is the optimiser step of the selected checkpoint, chosen on `validation_mean_mf1s`, not the step the run stopped at — every run so far selected between 8k and 23k, so the back half of each bought nothing. `%` is best nearest **1**.
 
 Row 11 repeats row 10, most likely with the same seed (`--seed` defaults to 42), so the gap between them is run-to-run spread. Bold marks cover rows 1–10.
+
+The sign head of the checkpoint of row 11 was never trained, so every run that starts from it ([Starting from a checkpoint](#starting-from-a-checkpoint)) starts with the same sign head.
 
 **Defaults since 2026-09-15 are row 9's recipe**: `--fps-aug on`, `--tempo-stretch on`, frame dropout 0.15, body-part dropout 0.1 and attention dropout 0.1, in both `train.py` and `pretrain_youtube.slurm`. Rows 1–9 each spell out what they turned on, so they read the same as before; any run launched after this without those flags gets the recipe.
 

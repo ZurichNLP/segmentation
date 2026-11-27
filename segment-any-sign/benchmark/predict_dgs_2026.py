@@ -114,6 +114,19 @@ TRAINING_ONLY_KEYS = ("sign_loss_fn.weight", "phrase_loss_fn.weight")
 SHIPPED_DECODE = "b-ignoring"
 
 
+def model_file(model_path: str | Path) -> Path:
+    """The file upstream's loader reads for `model_path`.
+
+    The same choice as `sign_language_segmentation.bin`: `model.safetensors`,
+    given or in the folder given; else the `.ckpt` given; else the `best.ckpt`
+    of the folder given, a run folder.
+    """
+    path = Path(model_path)
+    if path.suffix == ".safetensors" or (path / "model.safetensors").exists():
+        return path if path.suffix == ".safetensors" else path / "model.safetensors"
+    return path if path.suffix == ".ckpt" else path / "best.ckpt"
+
+
 def stored_decode(model_path: str | Path) -> str | None:
     """The name of the decoder kept in the configuration of a model, or None.
 
@@ -128,13 +141,11 @@ def stored_decode(model_path: str | Path) -> str | None:
     """
     import torch
 
-    path = Path(model_path)
-    # the same choice of file as upstream's loader makes for this path
-    if path.suffix == ".safetensors" or (path / "model.safetensors").exists():
-        config = (path.parent if path.suffix == ".safetensors" else path) / "config.json"
+    file = model_file(model_path)
+    if file.suffix == ".safetensors":
+        config = file.parent / "config.json"
         return json.loads(config.read_text()).get("decode") if config.exists() else None
-    checkpoint = path if path.suffix == ".ckpt" else path / "best.ckpt"
-    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    state = torch.load(file, map_location="cpu", weights_only=False)
     return state.get("hyper_parameters", {}).get("decode")
 
 
