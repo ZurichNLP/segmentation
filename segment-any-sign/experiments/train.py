@@ -1414,7 +1414,8 @@ def dry_run(args) -> None:
         "attn_nhead": args.attn_nhead, "attn_ff_mult": args.attn_ff_mult,
         "attn_dropout": args.attn_dropout, "fps_aug": args.fps_aug,
         "frame_dropout": args.frame_dropout, "num_frames": args.num_frames}
-    # as upstream's train() builds it, so that a dry run loads --finetune_from too
+    # with upstream's loader, as upstream's train() does for --finetune_from, so that a
+    # dry run loads the source too; but on the CPU, and without lr_scale_backbone
     model = (upstream_train.load_model(model_dir=args.finetune_from, device="cpu",
                                        config_overrides=options, eval_mode=False)
              if args.finetune_from else ValidationMetricsModel(**options))
