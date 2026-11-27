@@ -67,7 +67,7 @@ From a `.ckpt`, the run is one from scratch apart from its weights: its options 
 
 Only the weights come from the source, not the decoder kept in it: the decoder is `--decode`, else `b-honouring`. `finetune_source` in the record keeps the file, its sha256, its step and its run's record, when kept.
 
-A source of another shape stops the run with torch's error when the model is built, so start with `--dry-run`. A size mismatch in `frame_cnn.0.encoder_layers.0.0.weight` is `--velocity`; any other comes from `--hidden_dim`, `--encoder_depth`, `--attn_nhead` or `--attn_ff_mult`.
+A source of another shape stops the run with torch's error when the model is built, so start with `--dry-run`. A size mismatch in `frame_cnn.0.encoder_layers.0.0.weight` is `--velocity`, any other comes from `--hidden_dim`, `--attn_nhead` or `--attn_ff_mult`, and missing or unexpected keys come from `--encoder_depth`.
 
 ## What differs 2023 vs 2026, apart from the architecture
 
