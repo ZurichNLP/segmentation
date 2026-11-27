@@ -63,7 +63,7 @@ python experiments/train.py --run_name <NN>_dgs_from_youtube --decode b-honourin
     --finetune_from dist/02_pretrain_youtube_repro-2026.11.23/best.ckpt
 ```
 
-Apart from its weights the run is one from scratch: its options apply, every tensor of the source is loaded, and optimiser, schedule and step start anew. `--lr_scale_backbone` scales the learning rate of the backbone, not of the heads; at its default of 1 both train at one rate, as from scratch.
+From a `.ckpt`, the run is one from scratch apart from its weights: its options apply, every tensor of the source is loaded, and optimiser, schedule and step start anew. Upstream's export keeps in bf16 the RoPE buffers `inv_freq` too, which are computed, not trained: a run from an export differs from one from scratch in those as well, so a comparison starts from a `.ckpt`. `--lr_scale_backbone` scales the learning rate of the backbone, not of the heads; at its default of 1 both train at one rate, as from scratch.
 
 Only the weights come from the source, not the decoder kept in it: the decoder is `--decode`, else `b-honouring`. `finetune_source` in the record keeps the file, its sha256, its step and its run's record, when kept.
 
