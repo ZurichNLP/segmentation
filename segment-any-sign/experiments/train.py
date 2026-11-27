@@ -300,6 +300,7 @@ def main() -> None:
     args.corpus = args.poses = paths.lookup("data.public_dgs_corpus.downloads")
     args.data_loader = "datasets/public_dgs_corpus/load.py (archive, native fps)"
 
+    import sign_language_segmentation.bin as upstream_bin
     import sign_language_segmentation.train as upstream_train
     from sign_language_segmentation.train import _dated_run_name, train
 
@@ -324,16 +325,15 @@ def main() -> None:
     # metrics without touching upstream code or copying its training loop.
     from experiments.validation_metrics import ValidationMetricsModel
     upstream_train.PoseTaggingModel = ValidationMetricsModel
-    # --finetune_from: upstream's loader builds that model under its own name, with
-    # load_from_checkpoint for a .ckpt and from config.json for an export; train.py
-    # puts ValidationMetricsModel under that name. How to use it: README.md.
+    # And in upstream's loader, which builds the model of --finetune_from under its own
+    # name: with load_from_checkpoint for a .ckpt, from config.json for an export.
+    # How to use the option: README.md.
+    upstream_bin.PoseTaggingModel = ValidationMetricsModel
     if args.finetune_from:
         from benchmark.predict_dgs_2026 import model_file
 
-        import sign_language_segmentation.bin as upstream_bin
         from experiments.run_record import source_of
 
-        upstream_bin.PoseTaggingModel = ValidationMetricsModel
         args.finetune_source = source_of(model_file(args.finetune_from))
 
     # Validate on a list of datasets, not one. Upstream builds a single DEV
