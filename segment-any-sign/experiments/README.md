@@ -56,11 +56,11 @@ The job runs in the checkout it was submitted from, with the `python` that was o
 
 ## Starting from a checkpoint
 
-`--finetune_from`, upstream's option, starts a run from the weights of a `.ckpt`, a run folder (its `best.ckpt`) or upstream's safetensors export, whose float tensors are bf16. From inside `segment-any-sign/` with the `sas` environment active:
+`--finetune_from`, upstream's option, starts a run from the weights of a `.ckpt`, a run folder (its `best.ckpt`) or upstream's safetensors export, whose float tensors are bf16. From inside `segment-any-sign/` with the `sas` environment active, with the `--max_time` of the recorded DGS runs (upstream's default stops a run after 30 minutes):
 
 ```bash
 python experiments/train.py --run_name <NN>_dgs_from_youtube --decode b-honouring \
-    --finetune_from dist/02_pretrain_youtube_repro-2026.11.23/best.ckpt
+    --max_time 00:11:00:00 --finetune_from dist/<run>/best.ckpt
 ```
 
 From a `.ckpt`, the run is one from scratch apart from its weights: its options apply, every tensor of the source is loaded, and optimiser, schedule and step start anew. Upstream's export keeps in bf16 the RoPE buffers `inv_freq` too, which are computed, not trained: a run from an export differs from one from scratch in those as well, so a comparison starts from a `.ckpt`. `--lr_scale_backbone` scales the learning rate of the backbone, not of the heads; at its default of 1 both train at one rate, as from scratch.
